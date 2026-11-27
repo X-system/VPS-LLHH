@@ -17,22 +17,16 @@ import { clientLinks } from './core-config.mjs';
 import { switchRole } from './roles.mjs';
 import { diagnostics } from './diagnostics.mjs';
 import { appearanceView,configureAppearance,appearanceAsset } from './appearance.mjs';
-import { indexSubscriptions,subscription,subscriptionAddress } from './subscriptions.mjs';
+import { indexSubscriptions,subscription } from './subscriptions.mjs';
 import QRCode from 'qrcode';
 import { alertRules,configureAlertRules } from './metrics.mjs';
 import { peerView } from './tunnel-stats.mjs';
 import { lineUsage } from './line-usage.mjs';
 import {createHistorySampler,readHistory}from'./history.mjs';
 import { nodeSnapshot } from './controller-contract.mjs';
-import{linePermissions,saveLines}from'./line-permissions.mjs';
-import{catalog,subscriptionSettings,saveSubscriptionSettings,linkPresentation}from'./line-catalog.mjs';
-import{deleteUser,userUsage,deletedUsage,monthlyUserUsage}from'./user-ledger.mjs';
-import{createOnboarding,resumeSetup}from'./onboarding.mjs';
-import{createPairing}from'./pairing.mjs';
-import{pairingPath}from'./pairing-transport.mjs';
 
 const publicDirectory = fileURLToPath(new URL('../public/', import.meta.url));
-const assets = new Map([['', ['index.html','text/html; charset=utf-8']],...['app.js','presence.mjs','ui-kit.mjs','ui-help.mjs','ui-pages.mjs','ui-config.mjs','ui-mobile.mjs','ui-monitor.mjs','ui-feedback.mjs','ui-health.mjs','ui-user-details.mjs','ui-onboarding.mjs','ui-pairing.mjs','ui-service-settings.mjs'].map(name=>[name,[name,'text/javascript; charset=utf-8']]),...['style.css','ui-style.css','ui-mobile.css','ui-monitor.css','ui-feedback.css','ui-health.css'].map(name=>[name,[name,'text/css; charset=utf-8']]),['login-background.png',['login-background.png','image/png']]]);
+const assets = new Map([['', ['index.html','text/html; charset=utf-8']],...['app.js','presence.mjs','ui-kit.mjs','ui-help.mjs','ui-pages.mjs','ui-config.mjs','ui-mobile.mjs','ui-monitor.mjs','ui-feedback.mjs','ui-health.mjs'].map(name=>[name,[name,'text/javascript; charset=utf-8']]),...['style.css','ui-style.css','ui-mobile.css','ui-monitor.css','ui-feedback.css','ui-health.css'].map(name=>[name,[name,'text/css; charset=utf-8']]),['login-background.png',['login-background.png','image/png']]]);
 const DAY = 86400_000;
 const appVersion=JSON.parse(readFileSync(new URL('../package.json',import.meta.url),'utf8')).version;
 
@@ -65,10 +59,6 @@ export async function createApp(options = {}) {
   let pendingLogins = 0;
   const tls = options.tls;
   const systemRequest=options.systemRequest;
-  if(options.onboarding===true&&!store.get('onboarded')&&!store.get('onboarding')){store.set('onboarding',{version:2,step:'account',completed:[],draft:{}});store.set('settings',{...store.get('settings'),uiVersion:2});}
-  const onboarding=createOnboarding({store,request:systemRequest,fetchImpl:options.fetchImpl,allowLocalBark:!!options.allowLocalBark,resolve:options.resolveDomain});
-  const pairing=createPairing({store,request:systemRequest,origin:options.origin,tls,transport:options.pairingTransport,allowLocal:!!options.allowLocalPairing,applyServices:options=>onboarding.apply({},options)});
-  const pairingLimiter=new RateLimiter({max:60,window:60000,capacity:1024,clock:store.clock});
   if (options.production && !tls) { store.close(); throw new Error('生产环境必须配置 HTTPS'); }
   const json = (res, status, payload, extra = {}) => {
     const data = Buffer.from(JSON.stringify(payload));
@@ -83,11 +73,11 @@ export async function createApp(options = {}) {
   }
   function userRows() {
     return liveUsers(store,store.db.prepare(`SELECT u.id,u.name,u.enabled,u.protocols,u.exits,u.quota,u.expires,u.created,
-      COALESCE(t.up,0) AS up,COALESCE(t.down,0) AS down,t.last_activity,p.seen AS last_online FROM users u LEFT JOIN totals t ON t.user_id=u.id LEFT JOIN user_presence p ON p.user_id=u.id ORDER BY u.created DESC`).all().map(row => ({ ...row, enabled: !!row.enabled, protocols: JSON.parse(row.protocols), exits: JSON.parse(row.exits),lines:linePermissions(store,row.id), online: null, speedUp: null, speedDown: null, deployment:'未部署' })));
+      COALESCE(t.up,0) AS up,COALESCE(t.down,0) AS down,t.last_activity,p.seen AS last_online FROM users u LEFT JOIN totals t ON t.user_id=u.id LEFT JOIN user_presence p ON p.user_id=u.id ORDER BY u.created DESC`).all().map(row => ({ ...row, enabled: !!row.enabled, protocols: JSON.parse(row.protocols), exits: JSON.parse(row.exits), online: null, speedUp: null, speedDown: null, deployment:'未部署' })));
   }
   function metadata() {
     const config = store.get('settings');
-    return { version:appVersion,serverName: config.serverName, role: config.role, setupComplete: !!store.get('onboarded'),onboarding:{active:onboarding.view().active},uiVersion:config.uiVersion||1,systemChangesEnabled:!!systemRequest,appearance:appearanceView(store) };
+    return { version:appVersion,serverName: config.serverName, role: config.role, setupComplete: !!store.get('onboarded'),systemChangesEnabled:!!systemRequest,appearance:appearanceView(store) };
   }
   const handler = async (req, res) => {
     res.setHeader('Cache-Control','no-store');
@@ -100,17 +90,12 @@ export async function createApp(options = {}) {
       const entrance = store.get('entrance');
       const prefix = `/${entrance.value}/`;
       const pathname = String(req.url || '').split('?')[0];
-      if(pathname===pairingPath){
-        if(req.method!=='POST'||options.origin&&!requestOrigin(req)||!pairingLimiter.allow(req.socket.remoteAddress))return json(res,404,{error:'Not found'});
-        const match=/^Bearer ([A-Za-z0-9_-]{32,128})$/.exec(req.headers.authorization||'');if(!match)return json(res,404,{error:'Not found'});
-        return json(res,200,await pairing.machine(match[1],await body(req,16384)));
-      }
       const subscriptionMatch=/^\/sub\/([A-Za-z0-9_-]{24,128})$/.exec(pathname);
       if(req.method==='GET'&&subscriptionMatch){
         if(options.origin&&!requestOrigin(req))return json(res,404,{error:'Not found'});
         if(!subscriptionLimiter.allow(req.socket.remoteAddress))return json(res,429,{error:'请求过于频繁'});
         const result=subscription(store,subscriptionMatch[1]);if(!result)return json(res,404,{error:'Not found'});
-        res.writeHead(200,{'Content-Type':'text/plain; charset=utf-8','subscription-userinfo':result.userinfo,'profile-title':'base64:'+Buffer.from(result.title).toString('base64'),'Content-Disposition':"attachment; filename=subscription.txt; filename*=UTF-8''"+encodeURIComponent(result.title+'.txt').replace(/[!'()*]/g,char=>'%'+char.charCodeAt(0).toString(16).toUpperCase())});return res.end(result.body);
+        res.writeHead(200,{'Content-Type':'text/plain; charset=utf-8','subscription-userinfo':result.userinfo});return res.end(result.body);
       }
       // Deliberately do not normalize or redirect malformed/escaped paths.
       if (!pathname.startsWith(prefix) || /%|\\|\/\//.test(pathname) || pathname.split('/').some(part => part === '.' || part === '..')) return json(res,404,{ error:'Not found' });
@@ -135,13 +120,6 @@ export async function createApp(options = {}) {
         res.writeHead(200,{'Content-Type':type,'Content-Length':data.length}); return res.end(data);
       }
       if (req.method === 'GET' && suffix === 'api/meta') return json(res,200,metadata());
-      if(req.method==='POST'&&suffix==='api/bootstrap'){
-        if(!loginLimiter.allow(req.socket.remoteAddress))throw new HttpError(429,'请求过于频繁，请稍后再试');
-        const data=await body(req),access=store.get('bootstrap-access');
-        if(onboarding.view().step!=='account'||!access||access.expires<=store.clock()||typeof data.token!=='string'||!/^[A-Za-z0-9_-]{32,128}$/.test(data.token)||digest(data.token)!==access.hash)throw new HttpError(401,'首次设置链接已失效，请使用安装时的备用临时账户登录');
-        const raw=token(),csrf=token();store.transaction(()=>{store.set('bootstrap-access',null);store.db.prepare('INSERT INTO sessions VALUES(?,?,?)').run(digest(raw),csrf,store.clock()+10*3600000);store.audit('使用首次设置链接');});
-        return json(res,200,{csrf,...metadata()},{'Set-Cookie':`vps_session=${raw}; Path=${prefix}; HttpOnly; SameSite=Strict; Max-Age=36000${tls?'; Secure':''}`});
-      }
       if (req.method === 'POST' && suffix === 'api/login') {
         if (!loginLimiter.allow(req.socket.remoteAddress) || pendingLogins >= 4) {
           enqueueEvent(store,'login.failures',{body:'管理登录尝试过于频繁，已触发限速。'});
@@ -166,22 +144,6 @@ export async function createApp(options = {}) {
       if (!session) throw new HttpError(401,'请先登录');
       if (!['GET','HEAD'].includes(req.method) && req.headers['x-csrf-token'] !== session.csrf) throw new HttpError(403,'操作验证失败，请刷新后重试');
       if (req.method === 'GET' && suffix === 'api/session') return json(res,200,{ csrf:session.csrf,...metadata(),username:store.db.prepare('SELECT username FROM admin WHERE id=1').get().username });
-      if(suffix==='api/onboarding'){
-        if(req.method==='GET')return json(res,200,{...onboarding.view(),meta:metadata()});
-        if(req.method==='POST'){
-          const result=await onboarding.advance(await body(req)),issued=result.session;delete result.session;
-          if(issued)try{unlinkSync(join(options.directory||resolve('data'),'.bootstrap.json'));}catch(error){if(error.code!=='ENOENT')store.audit('首次凭证文件清理失败');}
-          return json(res,result.job?.state==='running'?202:200,{...result,meta:metadata(),...(issued?{csrf:issued.csrf}:{})},issued?{'Set-Cookie':`vps_session=${issued.raw}; Path=${prefix}; HttpOnly; SameSite=Strict; Max-Age=36000${tls?'; Secure':''}`}:{ });
-        }
-      }
-      if(req.method==='POST'&&suffix==='api/service-setup'){
-        if(!systemRequest)throw new HttpError(501,'服务配置需要连接服务器管理器');
-        return json(res,202,await onboarding.apply(await body(req)));
-      }
-      if(suffix==='api/pairing'){
-        if(req.method==='GET')return json(res,200,pairing.view());
-        if(req.method==='POST'){if(!systemRequest)throw new HttpError(501,'配对需要连接服务器管理器');return json(res,200,await pairing.action(await body(req,8192)));}
-      }
       if (req.method === 'POST' && suffix === 'api/logout') {
         store.db.prepare('DELETE FROM sessions WHERE token=?').run(session.token);
         return json(res,200,{ ok:true },{'Set-Cookie':`vps_session=; Path=${prefix}; HttpOnly; SameSite=Strict; Max-Age=0${tls ? '; Secure':''}`});
@@ -195,7 +157,6 @@ export async function createApp(options = {}) {
         return json(res,200,next);
       }
       if (req.method === 'POST' && suffix === 'api/setup') {
-        if(onboarding.view().active)throw new HttpError(409,'请继续完成首次引导');
         if (store.get('onboarded')) throw new HttpError(409,'初始配置已经完成');
         const data = await body(req);
         if (!['relay','exit'].includes(data.role) || Object.keys(data).some(key=>!['role','serverName'].includes(key))) throw new HttpError(400,'角色配置错误');
@@ -219,16 +180,11 @@ export async function createApp(options = {}) {
         const users = userRows();
         const status=store.get('service-status'),fresh=status&&store.clock()-status.at<=20000;
         return json(res,200,{ ...metadata(), runtime:store.get('runtime'), users:users.length, activeUsers:users.some(user=>user.online!==null)?users.filter(user=>user.online).length:null,
-          traffic:store.db.prepare('SELECT COALESCE(SUM(up+down),0) AS total FROM line_periods').get().total, speedUp:users.some(user=>user.speedUp!==null)?users.reduce((sum,user)=>sum+(user.speedUp||0),0):null,speedDown:users.some(user=>user.speedDown!==null)?users.reduce((sum,user)=>sum+(user.speedDown||0),0):null,
+          traffic:users.reduce((sum,user)=>sum+user.up+user.down,0), speedUp:users.some(user=>user.speedUp!==null)?users.reduce((sum,user)=>sum+(user.speedUp||0),0):null,speedDown:users.some(user=>user.speedDown!==null)?users.reduce((sum,user)=>sum+(user.speedDown||0),0):null,
           cores:['vmess.att','vmess.direct','hy2.att','hy2.direct'].map(id=>({id,name:`${id.startsWith('hy2')?'Hy2':'TCP'} · ${id.endsWith('att')?'ATT':'直出'}`,status:fresh?(status.profiles[id]?.active?'运行中':'已停止'):'状态未知'})),
-          host:{ adapter:systemRequest?'Linux管理器':'本地开发',systemChangesEnabled:!!systemRequest }, deploymentReady:!!readSecret(store,'relay-config'),configuration:relayView(store),telemetry:store.get('host-telemetry')||null,trend:store.get('traffic-samples')||[] });
+          host:{ adapter:systemRequest?'Linux管理器':'本地开发',systemChangesEnabled:!!systemRequest }, deploymentReady:!!readSecret(store,'relay-config'),telemetry:store.get('host-telemetry')||null,trend:store.get('traffic-samples')||[] });
       }
-      if (req.method === 'GET' && suffix === 'api/users') return json(res,200,{ users:userRows(),deleted:deletedUsage(store),monthlyUsage:monthlyUserUsage(store) });
-      if(req.method==='GET'&&suffix==='api/line-catalog')return json(res,200,{lines:catalog(store)});
-      if(suffix==='api/subscription-settings'){
-        if(req.method==='GET')return json(res,200,subscriptionSettings(store));
-        if(req.method==='PUT')return json(res,200,saveSubscriptionSettings(store,await body(req)));
-      }
+      if (req.method === 'GET' && suffix === 'api/users') return json(res,200,{ users:userRows() });
       if (req.method === 'GET' && suffix === 'api/line-usage') return json(res,200,lineUsage(store));
       if(req.method==='GET'&&suffix==='api/health')return json(res,200,health.view());
       if(req.method==='GET'&&suffix==='api/health/settings')return json(res,200,healthSettings(store));
@@ -241,29 +197,18 @@ export async function createApp(options = {}) {
         const value = validateUser(await body(req));
         const id = randomUUID();
         const credentials = store.seal(JSON.stringify({ vmess:randomUUID(),hy2:token(),subscription:token() }));
-        store.transaction(()=>{store.db.prepare('INSERT INTO users VALUES(?,?,?,?,?,?,?,?,?)').run(id,value.name,Number(value.enabled),JSON.stringify(value.protocols),JSON.stringify(value.exits),value.quota,value.expires,credentials,store.clock());saveLines(store,id,value.lines);store.audit('添加用户',{ id });});
+        store.transaction(()=>{store.db.prepare('INSERT INTO users VALUES(?,?,?,?,?,?,?,?,?)').run(id,value.name,Number(value.enabled),JSON.stringify(value.protocols),JSON.stringify(value.exits),value.quota,value.expires,credentials,store.clock());store.audit('添加用户',{ id });});
         indexSubscriptions(store);
         return json(res,201,{ user:userRows().find(user=>user.id===id), message:readSecret(store,'relay-config')?'用户已保存，运行线路的权限由后台同步':'用户已保存，请配置协议线路后再生成链接' });
       }
       const userMatch = /^api\/users\/([a-f0-9-]{36})$/.exec(suffix);
-      if(userMatch&&req.method==='GET'){
-        const user=userRows().find(user=>user.id===userMatch[1]);if(!user)throw new HttpError(404,'用户不存在');
-        return json(res,200,{user,usage:userUsage(store,user.id),lines:catalog(store)});
-      }
-      if(userMatch&&req.method==='DELETE'){
-        if(store.get('settings').role!=='relay')throw new HttpError(409,'出口机不管理代理用户');
-        if((await body(req)).confirmed!==true)throw new HttpError(409,'删除后原订阅失效，请确认');
-        return json(res,202,deleteUser(store,userMatch[1]));
-      }
       if (userMatch && req.method === 'PATCH') {
         if (store.get('settings').role !== 'relay') throw new HttpError(409,'出口机不管理代理用户');
         const prior=store.db.prepare('SELECT * FROM users WHERE id=?').get(userMatch[1]);
         if (!prior) throw new HttpError(404,'用户不存在');
         const data=await body(req);
-        const priorLines=linePermissions(store,prior.id),merged={name:prior.name,enabled:!!prior.enabled,protocols:JSON.parse(prior.protocols),exits:JSON.parse(prior.exits),quota:prior.quota,expires:prior.expires,...data};
-        if(!('lines'in data)&&priorLines!==undefined)merged.lines=priorLines.filter(id=>merged.protocols.includes(id.split('.')[0])&&merged.exits.includes(id.split('.')[1]));
-        const value=validateUser(merged);
-        store.transaction(()=>{store.db.prepare('UPDATE users SET name=?,enabled=?,protocols=?,exits=?,quota=?,expires=? WHERE id=?').run(value.name,Number(value.enabled),JSON.stringify(value.protocols),JSON.stringify(value.exits),value.quota,value.expires,prior.id);saveLines(store,prior.id,value.lines);store.audit('修改用户',{id:prior.id});});
+        const value=validateUser({name:prior.name,enabled:!!prior.enabled,protocols:JSON.parse(prior.protocols),exits:JSON.parse(prior.exits),quota:prior.quota,expires:prior.expires,...data});
+        store.transaction(()=>{store.db.prepare('UPDATE users SET name=?,enabled=?,protocols=?,exits=?,quota=?,expires=? WHERE id=?').run(value.name,Number(value.enabled),JSON.stringify(value.protocols),JSON.stringify(value.exits),value.quota,value.expires,prior.id);store.audit('修改用户',{id:prior.id});});
         return json(res,200,{ user:userRows().find(user=>user.id===prior.id) });
       }
       const linksMatch=/^api\/users\/([a-f0-9-]{36})\/links$/.exec(suffix);
@@ -279,9 +224,8 @@ export async function createApp(options = {}) {
         if(!user)throw new HttpError(404,'用户不存在');if(!config)throw new HttpError(409,'请先配置线路');
         const row=store.db.prepare('SELECT credentials FROM users WHERE id=?').get(user.id);
         const credentials=JSON.parse(store.unseal(row.credentials)),origin=options.origin||`${tls?'https':'http'}://${req.headers.host}`;
-        const links=await Promise.all(clientLinks(config,{...user,credentials},linkPresentation(store)).map(async link=>({...link,qr:await QRCode.toDataURL(link.url,{width:260,margin:1,errorCorrectionLevel:'M'})})));
-        const title=subscriptionSettings(store).title;
-        return json(res,200,{links,subscriptionName:title,subscriptionUrl:subscriptionAddress(origin,credentials.subscription,title),enabled:user.enabled});
+        const links=await Promise.all(clientLinks(config,{...user,credentials}).map(async link=>({...link,qr:await QRCode.toDataURL(link.url,{width:260,margin:1,errorCorrectionLevel:'M'})})));
+        return json(res,200,{links,subscriptionUrl:`${origin}/sub/${credentials.subscription}`,enabled:user.enabled});
       }
       if(req.method==='GET'&&suffix==='api/network')return json(res,200,networkView(store));
       if(req.method==='GET'&&suffix==='api/peers')return json(res,200,peerView(store));
@@ -312,13 +256,7 @@ export async function createApp(options = {}) {
       }
       if(req.method==='POST'&&suffix==='api/role'){
         if(!systemRequest)throw new HttpError(501,'此实例未连接Linux系统管理器');
-        const result=await switchRole(store,await body(req),systemRequest);
-        if(result.changed&&store.get('settings').uiVersion>=2){
-          if(store.get('relay-config'))store.set('relay-pending',store.get('relay-config'));
-          for(const key of['relay-config','network-config','auth-services','access-applied','service-status','live-traffic'])store.set(key,null);
-          resumeSetup(store);
-        }
-        indexSubscriptions(store);
+        const result=await switchRole(store,await body(req),systemRequest);indexSubscriptions(store);
         return json(res,200,{...result,...metadata()});
       }
       if(suffix==='api/certificate'){
@@ -328,10 +266,7 @@ export async function createApp(options = {}) {
           return json(res,200,saved&&!status.configured?{...status,configured:true,importPending:true,domain:saved.domain,email:saved.email,zoneId:saved.zoneId,staging:saved.staging}:status);
         }
         if(req.method==='PUT'){
-          const data=await body(req),saved=readSecret(store,'certificate-settings');
-          data.domain=text(data.domain,'代理域名',{max:253}).toLowerCase();for(const key of['token','email','zoneId'])if(typeof data[key]==='string')data[key]=data[key].trim();
-          if(!data.zoneId)data.zoneId=saved?.domain===data.domain?saved.zoneId:await onboarding.zone(data.domain,data.token||saved?.token);
-          const result=await systemRequest('certificate-configure',{...data,token:data.token||saved?.token});
+          const data=await body(req),saved=readSecret(store,'certificate-settings');const result=await systemRequest('certificate-configure',{...data,token:data.token||saved?.token});
           // CF token remains encrypted on both sides and is never returned to the browser.
           const previous=readSecret(store,'certificate-settings')||{};
           store.set('certificate-settings',store.seal(JSON.stringify({...previous,...data,token:data.token||previous.token})));
@@ -339,18 +274,13 @@ export async function createApp(options = {}) {
         }
         if(req.method==='POST'){store.audit('请求签发证书');return json(res,202,await systemRequest('certificate-issue'));}
       }
-      if(suffix==='api/tcp-acceleration'){
-        if(!systemRequest)throw new HttpError(501,'此实例未连接Linux系统管理器');
-        if(req.method==='GET')return json(res,200,await systemRequest('tcp-acceleration-status'));
-        if(req.method==='PUT'){const data=await body(req);if(Object.keys(data).length!==1||!['off','bbr','bbrx'].includes(data.mode))throw new HttpError(400,'请选择关闭、BBR或BBRX');store.audit('切换TCP加速',{mode:data.mode});return json(res,202,await systemRequest('tcp-acceleration-set',data));}
-      }
       if(['api/network','api/relay','api/services','api/system/inspect'].includes(suffix)){
         if(!systemRequest)throw new HttpError(501,'此实例未连接Linux系统管理器');
         if(req.method==='GET'&&suffix==='api/system/inspect')return json(res,200,await systemRequest('inspect'));
         if(req.method==='GET'&&suffix==='api/services')return json(res,200,{...await systemRequest('status'),runtime:store.get('runtime'),autoStart:store.get('settings').autoStart,autoRepair:store.get('settings').autoRepair});
         if(req.method==='PUT'&&suffix==='api/network'){const result=await saveNetwork(store,await body(req),systemRequest);health.sample(true);return json(res,200,result);}
         if(req.method==='PUT'&&suffix==='api/relay'){const result=await saveRelay(store,await body(req),systemRequest);health.sample(true);return json(res,200,result);}
-        if(req.method==='POST'&&suffix==='api/services'){const input=await body(req);if(Object.hasOwn(input,'expectedAutomationToken'))throw new HttpError(400,'此字段仅供本机自动配置使用');const result=await serviceAction(store,input,systemRequest);health.sample(true);return json(res,200,result);}
+        if(req.method==='POST'&&suffix==='api/services'){const result=await serviceAction(store,await body(req),systemRequest);health.sample(true);return json(res,200,result);}
       }
       if (req.method === 'GET' && suffix === 'api/audit') return json(res,200,{ entries:store.db.prepare('SELECT * FROM audit ORDER BY id DESC LIMIT 100').all().map(row=>({...row,detail:JSON.parse(row.detail)})) });
       if(req.method==='GET'&&suffix==='api/diagnostics'){
@@ -387,7 +317,6 @@ export async function createApp(options = {}) {
         const result=importBackup(store,data.backup,{password:data.password,mode:data.mode,confirmed:data.confirmed,allowLocalHttp:!!options.allowLocalBark});
         if(systemRequest)store.set('runtime',{maintenance:true,emergencyStop:true});
         for(const key of['relay-config','relay-pending','network-config','auth-services','access-applied','service-status','live-traffic'])store.set(key,null);
-        if(store.get('settings').uiVersion>=2)resumeSetup(store);
         indexSubscriptions(store);
         return json(res,200,{...result,...metadata()});
       }
@@ -397,7 +326,6 @@ export async function createApp(options = {}) {
         const result=rollbackImport(store,{confirmed:true});
         // Local root configuration may have changed since the import. Require fresh confirmation.
         for(const key of['relay-config','relay-pending','network-config','auth-services','access-applied','service-status','live-traffic'])store.set(key,null);
-        if(store.get('settings').uiVersion>=2)resumeSetup(store);
         indexSubscriptions(store);return json(res,200,{...result,requiresPairing:true,...metadata()});
       }
       // Never fake successful deployment or system actions in development mode.
@@ -419,11 +347,10 @@ export async function createApp(options = {}) {
   let dispatching=false;
   const timer=setInterval(()=>{
     try { maintenance(); } catch { /* Keep authentication fail-closed on maintenance errors. */ }
-    onboarding.syncCertificate().catch(()=>{});
     if(!dispatching) {dispatching=true;dispatchEvents(store,{fetchImpl:options.fetchImpl,origin:options.origin}).catch(()=>{}).finally(()=>{dispatching=false;});}
   },30000);
   timer.unref();const history=createHistorySampler(store);const health=createNodeHealth({store,request:systemRequest,enabled:options.healthEnabled??(options.production===true&&!!systemRequest),...options.healthOptions});
-  return { server,store,maintenance,history,health,onboarding,pairing, async close() { clearInterval(timer);history.close();await health.close(); await new Promise((resolve,reject)=>server.close(error=>error?reject(error):resolve())); while(dispatching)await new Promise(resolve=>setTimeout(resolve,20));await onboarding.wait();store.close(); } };
+  return { server,store,maintenance,history,health, async close() { clearInterval(timer);history.close();await health.close(); await new Promise((resolve,reject)=>server.close(error=>error?reject(error):resolve())); while(dispatching)await new Promise(resolve=>setTimeout(resolve,20));store.close(); } };
 }
 
 if (process.argv[1] && resolve(process.argv[1])===fileURLToPath(import.meta.url)) {

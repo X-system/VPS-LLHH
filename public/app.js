@@ -1,7 +1,3 @@
-import{serviceSettings}from'./ui-service-settings.mjs';
-import{renderOnboarding}from'./ui-onboarding.mjs';
-import{installPairingNotifications}from'./ui-pairing.mjs';
-import{openUserDetails}from'./ui-user-details.mjs';
 import{installHealth,healthSettingsControls}from'./ui-health.mjs';
 import{installFeedback,showOverlay,hideOverlay}from'./ui-feedback.mjs';
 import{mountMonitor,refreshMonitor}from'./ui-monitor.mjs';
@@ -13,7 +9,7 @@ import{installMobile}from'./ui-mobile.mjs';
 import{lastOnline}from'./presence.mjs';
 const base = new URL('.', import.meta.url).pathname;
 const root = document.querySelector('#app');
-const allowedPages=new Set(['monitor','overview','users','traffic','lines','certificates','settings','logs','events','maintenance','help','services']);
+const allowedPages=new Set(['monitor','overview','users','traffic','lines','certificates','settings','logs','events','maintenance','help']);
 const state = {meta:null,csrf:null,page:allowedPages.has(location.hash.slice(1))?location.hash.slice(1):'overview',renderId:0,tabs:{}};
 const ctx={state,api,toast,userDialog,showLinks,navigate};
 const escape = value => String(value ?? '').replace(/[&<>"']/g,char=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[char]));
@@ -23,12 +19,11 @@ const role = () => state.meta?.role === 'exit' ? '出口机' : '中转机';
 let toastTimer;const toastNode=document.querySelector('#toast');
 function toast(message) { const node=toastNode;node.textContent=message;node.style.display='block';showOverlay(node);clearTimeout(toastTimer);toastTimer=setTimeout(()=>{hideOverlay(node);node.style.display='none';},4200); }
 async function api(path, { method='GET',data } = {}) {
-  const sentCsrf=state.csrf;
   const controller=new AbortController(),deadline=setTimeout(()=>controller.abort(),20000);
   let response;try{response=await fetch(`${base}api/${path}`,{ method,signal:controller.signal,credentials:'same-origin',headers:{ ...(data?{'Content-Type':'application/json'}:{}),...(state.csrf?{'X-CSRF-Token':state.csrf}:{}) },body:data?JSON.stringify(data):undefined });}catch(error){throw new Error(controller.signal.aborted?(method==='GET'?'获取数据超时，请稍后重试。':'请求超时，操作可能仍在后台执行；请先更新数据确认状态，避免重复提交。'):'面板暂时不可用，可能正在重启；请稍后重试。');}finally{clearTimeout(deadline);}
   const result=await response.json();
   if (!response.ok) {
-    if(response.status===401&&path!=='login'&&state.csrf===sentCsrf){state.csrf=null;if(state.meta)login();}
+    if(response.status===401&&path!=='login'){state.csrf=null;if(state.meta)login();}
     if(response.status===404&&result.error==='Not found'){state.csrf=null;root.innerHTML='<div class="loading">安全入口已更新或不可用。请查看Bark通知，或通过SSH应急菜单查看当前入口。</div>';}
     const error=new Error(result.error==='Not found'?'管理入口或请求已失效':result.error||'请求失败');error.status=response.status;throw error;
   }
@@ -51,11 +46,10 @@ function navigate(page,filters){
  return render().then(()=>window.scrollTo(0,0)).catch(error=>toast(error.message));
 }
 function shell(){
- const exit=state.meta.role==='exit',signature=JSON.stringify([state.meta.role,state.meta.serverName,state.meta.appearance,state.meta.uiVersion]);
+ const exit=state.meta.role==='exit',signature=JSON.stringify([state.meta.role,state.meta.serverName,state.meta.appearance]);
  if(root.querySelector('.sidebar')&&root.dataset.shellSignature===signature)return;
  root.dataset.shellSignature=signature;
- const legacyGroups=[['日常管理',[['overview','dashboard','运行总览'],['users','users',exit?'中转机管理':'用户管理'],['traffic','traffic',exit?'线路流量':'流量与额度'],['monitor','traffic','历史监控'],['lines','network','线路管理']]],['配置中心',[['certificates','shield','域名与证书'],['events','bell','消息与告警'],['settings','settings','面板设置']]],['工具与帮助',[['logs','logs','日志与诊断'],['maintenance','tools','备份与维护'],['help','help','使用指南']]]];
- const groups=state.meta.uiVersion>=2?[['日常管理',[['overview','dashboard','首页'],...(!exit?[['users','users','用户管理']]:[]),['traffic','traffic','流量监控'],['services','network','服务配置'],['settings','settings','面板设置']]]]:legacyGroups;
+ const groups=[['日常管理',[['overview','dashboard','运行总览'],['users','users',exit?'中转机管理':'用户管理'],['traffic','traffic',exit?'线路流量':'流量与额度'],['monitor','traffic','历史监控'],['lines','network','线路管理']]],['配置中心',[['certificates','shield','域名与证书'],['events','bell','消息与告警'],['settings','settings','面板设置']]],['工具与帮助',[['logs','logs','日志与诊断'],['maintenance','tools','备份与维护'],['help','help','使用指南']]]];
  root.innerHTML=`<aside class="sidebar"><div class="brand">${state.meta.appearance?.hasLogo?`<img class="sidebar-logo" src="${base}appearance/logo.png" alt="Logo">`:`<span class="brand-symbol">${icon('network')}</span>`}<span>${escape(state.meta.appearance?.panelTitle||'线路管理')}</span></div><div class="server-identity"><span class="server-avatar">${icon('server')}</span><div><strong>${escape(state.meta.serverName)}</strong><small>${role()} · 独立管理</small></div></div><nav class="nav">${groups.map(([name,menus])=>`<div class="nav-group"><span class="nav-group-title">${name}</span>${menus.map(([id,symbol,label])=>`<button data-page="${id}" class="${state.page===id?'active':''}"><span class="nav-icon">${icon(symbol)}</span>${label}</button>`).join('')}</div>`).join('')}</nav><div class="sidebar-bottom"><button type="button" class="health-trigger" data-node-health aria-expanded="false" aria-controls="node-health-details"><i class="health-dot breathing grey" aria-hidden="true"></i><span class="health-trigger-label">正在检查服务</span>${icon('arrow')}</button><span>v${escape(state.meta.version||'0.1.0')}</span></div></aside><div class="shell"><header class="topbar"><span class="breadcrumb">工作台 <b>/</b> <span id="breadcrumb-page">运行总览</span></span><div class="right"><button class="link-button" id="quick-help">${icon('help')} 上手指南</button><span class="admin-avatar">${icon('users')}</span><button class="link-button" id="logout">退出登录</button></div></header><div class="content"><div class="page-heading"><div><span class="eyebrow">${role()}工作台</span><h1>${escape(state.meta.serverName)}</h1><span class="muted" id="page-subtitle">运行总览</span></div><div class="actions"><span id="refresh-state" class="refresh-state"><i></i>数据已连接</span><button id="refresh">${icon('refresh')} 更新数据</button></div></div><section id="page"></section></div></div>`;
  root.querySelectorAll('[data-page]').forEach(button=>button.onclick=()=>navigate(button.dataset.page));
  root.querySelector('#logout').onclick=async()=>{try{await api('logout',{method:'POST'});state.csrf=null;login();}catch(error){toast(error.message);}};
@@ -70,15 +64,20 @@ async function overview(page){return livePage('overview',page,ctx);}
 async function users(page){return livePage('users',page,ctx,state.userFilters);}
 async function showLinks(id){
  const result=await api('users/'+id+'/links'),dialog=document.createElement('dialog');dialog.className='links-dialog';
- dialog.innerHTML=`<div class="dialog-heading"><div><span class="eyebrow">导入 v2rayN 或手机客户端</span><h2>客户端导入链接</h2></div><button class="icon-button" id="close-links" aria-label="关闭导入链接">×</button></div><p class="muted">推荐使用订阅地址，用户可用的协议和出口会一起导入。链接包含个人凭证，请勿公开分享。</p><div class="subscription-box"><label>订阅：${escape(result.subscriptionName||state.meta.serverName)}</label><textarea readonly rows="2">${escape(result.subscriptionUrl)}</textarea><button class="primary" data-copy="subscription">${icon('copy')} 复制订阅地址</button><button class="link-button" data-guide-open="users">怎么导入客户端？</button></div><details class="advanced-details"><summary>单条线路链接与二维码</summary>${result.links.map((link,index)=>`<div class="link-entry"><label>${link.protocol==='hy2'?'Hy2':'TCP'} · ${link.exit==='att'?'经 ATT 出口':'本机直出'}</label><textarea readonly rows="2">${escape(link.url)}</textarea><button data-copy="${index}">${icon('copy')} 复制此线路</button><img class="link-qr" loading="lazy" src="${escape(link.qr)}" alt="此线路的导入二维码"></div>`).join('')}</details>`;
+ dialog.innerHTML=`<div class="dialog-heading"><div><span class="eyebrow">导入 v2rayN 或手机客户端</span><h2>客户端导入链接</h2></div><button class="icon-button" id="close-links" aria-label="关闭导入链接">×</button></div><p class="muted">推荐使用订阅地址，用户可用的协议和出口会一起导入。链接包含个人凭证，请勿公开分享。</p><div class="subscription-box"><label>推荐：订阅地址</label><textarea readonly rows="2">${escape(result.subscriptionUrl)}</textarea><button class="primary" data-copy="subscription">${icon('copy')} 复制订阅地址</button><button class="link-button" data-guide-open="users">怎么导入客户端？</button></div><details class="advanced-details"><summary>单条线路链接与二维码</summary>${result.links.map((link,index)=>`<div class="link-entry"><label>${link.protocol==='hy2'?'Hy2':'TCP'} · ${link.exit==='att'?'经 ATT 出口':'本机直出'}</label><textarea readonly rows="2">${escape(link.url)}</textarea><button data-copy="${index}">${icon('copy')} 复制此线路</button><img class="link-qr" loading="lazy" src="${escape(link.qr)}" alt="此线路的导入二维码"></div>`).join('')}</details>`;
  document.body.append(dialog);dialog.showModal();dialog.querySelector('#close-links').onclick=()=>dialog.remove();dialog.addEventListener('cancel',()=>dialog.remove(),{once:true});
  dialog.querySelectorAll('[data-copy]').forEach(button=>button.onclick=()=>copyText(button.dataset.copy==='subscription'?result.subscriptionUrl:result.links[Number(button.dataset.copy)].url));
 }
 async function copyText(value){
  try{if(navigator.clipboard&&window.isSecureContext)await navigator.clipboard.writeText(value);else{const input=document.createElement('textarea');input.value=value;input.style.position='fixed';input.style.opacity='0';document.body.append(input);input.select();const ok=document.execCommand('copy');input.remove();if(!ok)throw new Error();}toast('已复制');}catch{toast('浏览器未允许复制，请选中链接手动复制');}
 }
-function userDialog(user) {return openUserDetails(user,ctx).catch(error=>toast(error.message));}
-
+function userDialog(user) {
+  const dialog=document.createElement('dialog');
+  dialog.innerHTML=`<h2>${user?'编辑用户':'添加用户'}</h2><form><div class="field"><label>用户名称</label><input name="name" required maxlength="48" value="${escape(user?.name||'')}"></div><div class="field"><label>允许的协议</label><div class="checkboxes">${[['hy2','Hysteria2'],['vmess','VMess TCP']].map(([value,label])=>`<label><input type="checkbox" name="protocol" value="${value}" ${(user?.protocols||['hy2']).includes(value)?'checked':''}>${label}</label>`).join('')}</div></div><div class="field"><label>允许的出口</label><div class="checkboxes">${[['att','ATT 出口'],['direct','本机直出']].map(([value,label])=>`<label><input type="checkbox" name="exit" value="${value}" ${(user?.exits||['att']).includes(value)?'checked':''}>${label}</label>`).join('')}</div></div><div class="field"><label>流量额度（GB）</label><input name="quota" type="number" min="0" max="1000000" step="1" value="${user?.quota===null||!user?'':user.quota/1073741824}" placeholder="留空表示不限额"></div><div class="field"><label>到期时间</label><input name="expires" type="datetime-local" value="${user?.expires?new Date(user.expires-new Date(user.expires).getTimezoneOffset()*60000).toISOString().slice(0,16):''}"><small>留空表示长期有效。</small></div><label class="check-row"><input name="enabled" type="checkbox" ${user?.enabled!==false?'checked':''}>启用此用户</label><div class="settings-actions"><button type="button" id="cancel">取消</button><button class="primary">保存</button></div></form>`;
+  document.body.append(dialog);dialog.showModal();
+  const close=()=>{dialog.close();dialog.remove();};dialog.querySelector('#cancel').onclick=close;dialog.addEventListener('cancel',()=>dialog.remove(),{once:true});
+  dialog.querySelector('form').onsubmit=async event=>{event.preventDefault();const form=event.currentTarget;const data={name:form.elements.namedItem('name').value,enabled:form.elements.namedItem('enabled').checked,protocols:[...form.querySelectorAll('[name=protocol]:checked')].map(input=>input.value),exits:[...form.querySelectorAll('[name=exit]:checked')].map(input=>input.value),quota:form.elements.namedItem('quota').value===''?null:Number(form.elements.namedItem('quota').value)*1073741824,expires:form.elements.namedItem('expires').value?new Date(form.elements.namedItem('expires').value).getTime():null};try{await api(user?`users/${user.id}`:'users',{method:user?'PATCH':'POST',data});close();toast('用户已保存，几秒内生效；可点击“导入链接”开始使用');await render();}catch(error){toast(error.message);}};
+}
 async function settings(page) {
   const config=await api('settings');
   page.innerHTML=`<div class="settings-grid"><article class="card"><div class="card-header"><h2>基础设置</h2></div><form class="card-body" id="settings-form"><div class="field"><label>服务器名称</label><input name="serverName" maxlength="48" value="${escape(config.serverName)}" required><small>用于总览主标题、登录页、浏览器标签页和推送。</small></div><div class="field"><label>安全入口更新周期（天）</label><input name="rotationDays" type="number" min="1" max="180" value="${config.rotationDays}" required><small>强制启用，范围 1～180 天；不能关闭、自定义或设为永久。下次轮换：${when(config.nextRotation)}</small></div><div class="field"><label>线路标称带宽（Mbps）</label><input name="bandwidthMbps" type="number" min="1" max="1000000" value="${config.bandwidthMbps}" required><small>用于带宽告警阈值计算，不采用网卡标称速度。</small></div><div class="field"><label>操作日志保留天数</label><input name="logRetentionDays" type="number" min="1" max="365" value="${config.logRetentionDays}" required></div><div class="settings-actions"><button class="primary">保存设置</button></div></form></article><article class="card"><div class="card-header"><h2>管理员账户</h2></div><form class="card-body" id="account-form"><div class="field"><label>当前密码</label><input type="password" name="currentPassword" autocomplete="current-password" required></div><div class="field"><label>新用户名</label><input name="username" maxlength="48" autocomplete="username" value="${escape(state.meta.username||'')}" required></div><div class="field"><label>新密码</label><input type="password" name="password" minlength="12" maxlength="128" autocomplete="new-password" required><small>至少12位；修改后所有会话失效，需要重新登录。</small></div><div class="settings-actions"><button>更新管理员凭证</button></div></form></article></div>`;
@@ -239,10 +238,9 @@ async function maintenance(page) {
   };
 }
 async function render(){
- if(!state.csrf)return login();if(state.meta.onboarding?.active)return renderOnboarding(root,ctx);if(!state.meta.setupComplete)return setup();
- if(state.meta.uiVersion>=2){if(['lines','certificates','events'].includes(state.page))state.page='services';if(state.page==='monitor')state.page='traffic';}
+ if(!state.csrf)return login();if(!state.meta.setupComplete)return setup();
  const renderId=++state.renderId;shell();state.refreshCertificate=null;state.refreshServices=null;
- const names={monitor:'历史监控',overview:'运行总览',users:state.meta.role==='exit'?'中转机管理':'用户管理',traffic:state.meta.role==='exit'?'线路流量':'流量与额度',lines:'线路管理',certificates:'域名与证书',settings:'面板设置',logs:'日志与诊断',events:'消息与告警',maintenance:'备份与维护',help:'使用指南',services:'服务配置'};
+ const names={monitor:'历史监控',overview:'运行总览',users:state.meta.role==='exit'?'中转机管理':'用户管理',traffic:state.meta.role==='exit'?'线路流量':'流量与额度',lines:'线路管理',certificates:'域名与证书',settings:'面板设置',logs:'日志与诊断',events:'消息与告警',maintenance:'备份与维护',help:'使用指南'};
  root.querySelectorAll('[data-page]').forEach(b=>{b.classList.toggle('active',b.dataset.page===state.page);b.setAttribute('aria-current',b.dataset.page===state.page?'page':'false');});
  root.querySelector('#page-subtitle').textContent=names[state.page];root.querySelector('#breadcrumb-page').textContent=names[state.page];
  const stage=document.createElement('section');stage.id='page';stage.dataset.page=state.page;
@@ -250,12 +248,10 @@ async function render(){
  if(state.page==='overview')await overview(stage);
  else if(state.page==='users')await users(stage);
  else if(state.page==='monitor')await mountMonitor(stage,ctx);
- else if(state.page==='traffic'&&state.meta.uiVersion>=2){const chart=document.createElement('section'),usage=document.createElement('section');stage.append(chart,usage);await mountMonitor(chart,ctx);await livePage('traffic',usage,ctx);state.simpleRefresh=async()=>{await refreshMonitor(chart,ctx);await refreshLive(usage,ctx);};}
  else if(state.page==='traffic')await livePage('traffic',stage,ctx);
- else if(state.page==='services')await serviceSettings(stage,ctx);
  else if(state.page==='lines'){await lines(stage);await serviceControls(stage);organizeConfig(stage,'lines',ctx);}
  else if(state.page==='certificates'){await certificateControls(stage);organizeConfig(stage,'certificates',ctx);}
- else if(state.page==='settings'){await settings(stage);await appearanceControls(stage);await panelConnectionControls(stage);await recoveryControls(stage);await healthSettingsControls(stage,ctx);organizeConfig(stage,'settings',ctx);if(state.meta.uiVersion>=2){const tools=document.createElement('details');tools.className='advanced-details';tools.innerHTML='<summary>备份、日志与诊断</summary><div data-simple-tools></div>';stage.append(tools);let loaded=false;tools.ontoggle=async()=>{if(!tools.open||loaded)return;loaded=true;const holder=tools.querySelector('[data-simple-tools]'),backup=document.createElement('section'),records=document.createElement('section');holder.append(backup,records);try{await maintenance(backup);await logs(records);}catch(error){toast(error.message);}};}}
+ else if(state.page==='settings'){await settings(stage);await appearanceControls(stage);await panelConnectionControls(stage);await recoveryControls(stage);await healthSettingsControls(stage,ctx);organizeConfig(stage,'settings',ctx);}
  else if(state.page==='logs'){await logs(stage);organizeConfig(stage,'logs',ctx);}
  else if(state.page==='events'){await events(stage);await alertControls(stage);organizeConfig(stage,'events',ctx);}
  else if(state.page==='maintenance'){await maintenance(stage);await updateControls(stage);await maintenanceExtras(stage);organizeConfig(stage,'maintenance',ctx);}
@@ -268,15 +264,14 @@ function stampRefresh(error=false){const node=root.querySelector('#refresh-state
 let refreshing=false;
 async function refreshCurrent(manual=false){
  if(!state.csrf)return;if(refreshing){if(manual)toast('正在更新，请稍候');return;}refreshing=true;
- try{const page=root.querySelector('#page');if(state.page==='traffic'&&state.meta.uiVersion>=2&&state.simpleRefresh)await state.simpleRefresh();else if(page&&['overview','users','traffic'].includes(state.page))await refreshLive(page,ctx);else if(state.page==='monitor')await refreshMonitor(page,ctx);else if(['lines','services'].includes(state.page)&&state.refreshServices)await state.refreshServices();else if(state.page==='certificates'&&state.refreshCertificate)await state.refreshCertificate();else if(manual){const meta=await api('meta');Object.assign(state.meta,meta);toast('连接正常，填写内容已保留');}stampRefresh();if(manual&&['overview','users','traffic','monitor','lines','certificates'].includes(state.page))toast('数据已更新');}
+ try{const page=root.querySelector('#page');if(page&&['overview','users','traffic'].includes(state.page))await refreshLive(page,ctx);else if(state.page==='monitor')await refreshMonitor(page,ctx);else if(state.page==='lines'&&state.refreshServices)await state.refreshServices();else if(state.page==='certificates'&&state.refreshCertificate)await state.refreshCertificate();else if(manual){const meta=await api('meta');Object.assign(state.meta,meta);toast('连接正常，填写内容已保留');}stampRefresh();if(manual&&['overview','users','traffic','monitor','lines','certificates'].includes(state.page))toast('数据已更新');}
  catch(error){stampRefresh(true);if(manual)throw error;}finally{refreshing=false;}
 }
 installFeedback(ctx);
 installHelp(ctx);
 installMobile(ctx);
 installHealth(ctx);
-installPairingNotifications(ctx);
 window.addEventListener('popstate',()=>{const page=location.hash.slice(1);if(allowedPages.has(page)&&page!==state.page){state.page=page;render().catch(error=>toast(error.message));}});
-try{state.meta=await api('meta');title();const initial=/^#setup=([A-Za-z0-9_-]{32,128})$/.exec(location.hash);if(initial){history.replaceState(null,'',location.pathname);const session=await api('bootstrap',{method:'POST',data:{token:initial[1]}});state.csrf=session.csrf;state.meta=session;}else try{const session=await api('session');state.csrf=session.csrf;state.meta=session;}catch(error){if(error.status!==401)throw error;}await render();}
+try{state.meta=await api('meta');title();try{const session=await api('session');state.csrf=session.csrf;state.meta=session;}catch(error){if(error.status!==401)throw error;}await render();}
 catch(error){root.innerHTML='<div class="connection-error" role="alert"><h2>暂时无法获取数据</h2><p>'+escape(error.message||'请检查网络或当前管理入口。')+'</p><button id="retry-connection" class="primary">重新连接</button><p>若安全入口已更新，请查看 Bark 通知或 SSH 应急菜单。</p></div>';root.querySelector('#retry-connection').onclick=()=>location.reload();}
-setInterval(()=>{if(!state.csrf||!state.meta?.setupComplete||document.visibilityState!=='visible'||document.querySelector('dialog[open]'))return;if(['overview','users','traffic','lines','services','monitor'].includes(state.page))refreshCurrent();},5000);
+setInterval(()=>{if(!state.csrf||!state.meta?.setupComplete||document.visibilityState!=='visible'||document.querySelector('dialog[open]'))return;if(['overview','users','traffic','lines','monitor'].includes(state.page))refreshCurrent();},5000);

@@ -18,8 +18,6 @@ let networkRuntime={};try{networkRuntime=JSON.parse(await readFile('/etc/vps-pan
 const driver=createSystemDriver();
 // Guard the data plane first, while all helpers are still present.
 await driver.action('emergency-stop');
-await run('/usr/bin/systemctl',['stop','vps-panel-tcp-apply.service']).catch(error=>{if(error.code!==5)throw error;});
-const{createTcpAcceleration}=await import('./tcp-acceleration.mjs');await createTcpAcceleration({runner:execute}).restore();
 for(const unit of Object.keys(serviceUnits())){await run('/usr/bin/systemctl',['disable',unit]);await run('/usr/bin/systemctl',['stop',unit]);}
 await createFirewall().removeOwned();
 for(const[family,table]of[['inet','vps_panel_guard'],['inet','vps_panel_forward'],['ip','vps_panel_nat']]){

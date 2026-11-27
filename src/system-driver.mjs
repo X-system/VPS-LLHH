@@ -3,9 +3,6 @@ import{promisify}from'node:util';
 import{mkdir,readFile,writeFile,rename,lstat,unlink}from'node:fs/promises';
 import{randomBytes}from'node:crypto';
 import{join}from'node:path';
-import{networkInterfaces}from'node:os';
-import{isIP}from'node:net';
-import{publicProbeIPv4}from'./node-health.mjs';
 import{buildRelayConfigs,buildFailClosed,validateRelay}from'./core-config.mjs';
 import{validateNetwork,wgConfig,exitRules,routePlan,wgPublic,ownsRouteRule}from'./network.mjs';
 import{streams}from'./access.mjs';
@@ -15,7 +12,6 @@ import{createFirewall}from'./firewall.mjs';
 import{probeBindings}from'./bindings.mjs';
 import{createUpdateManager}from'./updates.mjs';
 import{createPanelNetwork,parseWebEnvironment}from'./panel-network.mjs';
-import{createTcpAcceleration}from'./tcp-acceleration.mjs';
 import{readFuse,tripFuse,tripped,clearFuse}from'./safety-fuses.mjs';
 
 const execute=promisify(execFile);
@@ -25,10 +21,9 @@ export async function atomicWrite(path,content,mode=0o600){
  const temporary=path+'.'+randomBytes(12).toString('hex')+'.tmp';
  try{await writeFile(temporary,content,{mode,flag:'wx'});await rename(temporary,path);}finally{await unlink(temporary).catch(error=>{if(error.code!=='ENOENT')throw error;});}
 }
-export function createSystemDriver({directory='/etc/vps-panel',coreDirectory='/usr/local/lib/vps-panel',unitDirectory='/etc/systemd/system',readInterfaces=networkInterfaces,runner=execute}={}){
+export function createSystemDriver({directory='/etc/vps-panel',coreDirectory='/usr/local/lib/vps-panel',runner=execute}={}){
  const certificates=createCertificateManager({directory:join(directory,'certs')});
  const firewall=createFirewall({runner});
- const tcpAcceleration=createTcpAcceleration({directory,coreDirectory,runner});
  const call=async(command,args,options={})=>{
   const binary=binaries[command];if(!binary)throw new Error('不允许的系统操作');
   try{return await runner(binary,args,{timeout:20000,maxBuffer:1024*1024,windowsHide:true,...options});}
@@ -123,12 +118,12 @@ export function createSystemDriver({directory='/etc/vps-panel',coreDirectory='/u
   const accounts=JSON.parse(await readFile(join(directory,'accounts.json'),'utf8'));
   const config=validateRelay({...raw,uids:identity,controlUid:accounts['vps-panel'].uid});
   if(current.network&&Object.values(config.ports.hy2).includes(current.network.listenPort))throw new Error('Hy2与WireGuard不能使用相同UDP端口');
-  if(current.network&&config.attEnabled!==false){
+  if(current.network){
    const network=current.network,peer=network.peers[0];
    if(network.wireguardInterface!==config.wireguardInterface||network.physicalInterface!==config.physicalInterface||peer.endpointIPv4!==config.endpointIPv4||peer.endpointPort!==config.endpointPort||peer.publicKey!==config.endpointPublicKey)throw new Error('线路与已保存的WG配对不一致');
   }
   if(!Array.isArray(users)||users.length>10000)throw new Error('用户列表错误');
-  const clean=users.map(row=>({...validateUser({name:row.name,enabled:!!row.enabled,protocols:row.protocols,exits:row.exits,quota:row.quota,expires:row.expires,lines:row.lines}),id:row.id,credentials:row.credentials,up:row.up||0,down:row.down||0}));
+  const clean=users.map(row=>({...validateUser({name:row.name,enabled:!!row.enabled,protocols:row.protocols,exits:row.exits,quota:row.quota,expires:row.expires}),id:row.id,credentials:row.credentials,up:row.up||0,down:row.down||0}));
   const generated=buildRelayConfigs(config,clean);
   // Stop before changing routes/guards; no partially configured public proxy becomes usable.
   for(const stream of streams)await stop(stream);
@@ -166,11 +161,10 @@ export function createSystemDriver({directory='/etc/vps-panel',coreDirectory='/u
   if(current.emergencyStop||tripped(directory,'emergency')||tripped(directory,'network'))throw new Error('急停或手动停止状态禁止恢复隧道');
   let runtime=await networkRuntime();await saveNetworkRuntime({...runtime,updating:true});
   if(config.role==='relay'){
-   // First-use pairing may bring up WG before any proxy profile exists.
-   // Proxy startup still requires a relay configuration and the full guard.
+   if(!current.relay)throw new Error('尚未配置中转线路');
    let routes=[];try{routes=JSON.parse((await call('ip',['-j','route','show','table','51820'])).stdout);}catch(error){if(error.code!==2)throw error;}
    if(routes.some(route=>route.dev!==config.wireguardInterface))throw new Error('路由表51820已被其他程序占用');
-   if(current.relay)await applyRules('guard',await guardRules(current.relay),[['inet','vps_panel_guard']]);
+   await applyRules('guard',await guardRules(current.relay),[['inet','vps_panel_guard']]);
   }else{
    await applyRules('forward',exitRules(config),[['inet','vps_panel_forward'],['ip','vps_panel_nat']]);
    if(runtime.forwardPrior===undefined){const prior=(await call('sysctl',['-n','net.ipv4.ip_forward'])).stdout.trim();if(!['0','1'].includes(prior))throw new Error('IP转发状态错误');runtime={...runtime,forwardPrior:Number(prior)};await saveNetworkRuntime({...runtime,updating:true});}
@@ -205,7 +199,7 @@ export function createSystemDriver({directory='/etc/vps-panel',coreDirectory='/u
    if(![up,down,handshakeAt].every(value=>Number.isSafeInteger(value)&&value>=0))throw new Error('WG流量计数错误');
    peers.push({publicKey:fields[0],up,down,handshakeAt:handshakeAt||null});
   }
-  let protectedRoute=config.role==='relay'&&!current.relay?true:await rulesIntact(config.role==='relay'?'guard':'forward');
+  let protectedRoute=await rulesIntact(config.role==='relay'?'guard':'forward');
   if(config.role==='relay'){
    const rules=JSON.parse((await call('ip',['-j','rule','show'])).stdout);
    if([11000,11100,11101,11102,11103].some(priority=>!rules.some(rule=>rule.priority===priority&&ownsRouteRule(rule,config.uids))))protectedRoute=false;
@@ -222,7 +216,6 @@ export function createSystemDriver({directory='/etc/vps-panel',coreDirectory='/u
  async function start(stream,{repair=false,expectedStopToken,expectedNetworkToken}={}){
   unitFor(stream);const observed=expectedStopToken===undefined?readFuse(directory,stream):expectedStopToken,networkToken=expectedNetworkToken===undefined?readFuse(directory,'network'):expectedNetworkToken;
   const current=await state();if(!current.relay)throw new Error('线路尚未配置');
-  if(current.relay.enabledProtocols&&!current.relay.enabledProtocols.includes(stream.split('.')[0])||stream.endsWith('.att')&&current.relay.attEnabled===false)throw new Error('该协议或ATT出口尚未开通');
   if(current.emergencyStop||tripped(directory,'emergency'))throw new Error('急停已锁定，请先明确解除急停');
   if(stream.startsWith('hy2.')){
    const cert=await certificates.status();
@@ -260,53 +253,15 @@ export function createSystemDriver({directory='/etc/vps-panel',coreDirectory='/u
   await firewall.removeOwned(['vps-panel-wireguard','vps-panel-forward']);
   return{up:false};
  }
- async function actionInspect(){
+ async function action(action,data={}){
+  const ticket=Object.fromEntries(['emergency','network',...streams].map(name=>[name,readFuse(directory,name)]));
+  if(['start','restart','configure-relay','configure-network','switch-role','release-emergency','policy','certificate-configure','certificate-issue','update-source','update-start','update-rollback','network-up','panel-configure','reload-panel-certificate','reload-hy2-certificate','repair-profile','repair-network','repair-guard'].includes(action))await assertMaintenanceIdle();
+  if(action==='inspect'){
    const uids=JSON.parse(await readFile(join(directory,'identities.json'),'utf8'));
    const accounts=JSON.parse(await readFile(join(directory,'accounts.json'),'utf8'));
    const routes=JSON.parse((await call('ip',['-j','-4','route','show','default'])).stdout);
    const env=parseWebEnvironment(await readFile(join(directory,'web.env'),'utf8'));
-   const iface=routes[0]?.dev,assigned=(readInterfaces()[iface]||[]).find(address=>address.family==='IPv4'&&publicProbeIPv4(address.address))?.address;
-   const fallback=new URL(env.VPS_ORIGIN).hostname,publicIPv4=assigned||(isIP(fallback)===4?fallback:null);
-   return{uids,controlUid:accounts['vps-panel'].uid,panelPort:Number(env.VPS_PORT),publicIPv4,physicalInterface:iface||null,systemChangesEnabled:true,stopTokens:Object.fromEntries(['emergency','network','automation',...streams].map(name=>[name,readFuse(directory,name)]))};
- }
- async function action(action,data={}){
-  if(action==='tcp-acceleration-status')return tcpAcceleration.status();
-  if(action==='tcp-acceleration-set'){if(!data||Object.keys(data).some(key=>key!=='mode'))throw new Error('TCP加速参数错误');await assertMaintenanceIdle();return tcpAcceleration.configure(data.mode);}
-  const ticket=Object.fromEntries(['emergency','network','automation',...streams].map(name=>[name,readFuse(directory,name)]));
-  if(['stop','stop-all','network-down','emergency-stop'].includes(action)&&!Object.hasOwn(data,'expectedAutomationToken'))tripFuse(directory,'automation');
-  if(Object.hasOwn(data,'expectedAutomationToken')&&readFuse(directory,'automation')!==data.expectedAutomationToken)throw new Error('已收到新的手动停止操作，自动配置已取消');
-  if(['start','restart','configure-relay','configure-network','switch-role','release-emergency','policy','certificate-configure','certificate-issue','update-source','update-start','update-rollback','network-up','panel-configure','reload-panel-certificate','reload-hy2-certificate','repair-profile','repair-network','repair-guard','forget-network'].includes(action))await assertMaintenanceIdle();
-  if(action==='inspect')return actionInspect();
-  if(action==='plan-relay'){
-   const current=await state(),info=await actionInspect();
-   if(current.relay)return{...info,ports:current.relay.ports};
-   const ports={vmess:{att:18001,direct:18002},hy2:{att:443,direct:8443}},used=new Set([info.panelPort,18444,19001,19002,19003,19004,current.network?.listenPort].filter(Boolean));
-   for(const protocol of['vmess','hy2'])for(const exit of['att','direct']){
-    let selected=null;
-    for(let attempt=0;attempt<16;attempt++){
-     const candidate=attempt?49152+randomBytes(2).readUInt16BE()%16384:ports[protocol][exit];if(used.has(candidate))continue;
-     try{await probeBindings([{host:'0.0.0.0',port:candidate,protocol:protocol==='hy2'?'udp':'tcp'}]);selected=candidate;break;}catch{}
-    }
-    if(selected===null)throw new Error('无法自动分配线路端口，请检查服务器是否有其他服务占用');
-    ports[protocol][exit]=selected;used.add(selected);
-   }
-   return{...info,ports};
-  }
-  if(action==='plan-network'){
-   const current=await state();if(current.network)return{listenPort:current.network.listenPort};
-   const info=await actionInspect(),reserved=new Set([info.panelPort,...Object.values(current.relay?.ports||{}).flatMap(value=>Object.values(value)),...Object.values(current.relay?.stats||{}).map(value=>value.port),current.relay?.authServices?.port].filter(Number.isInteger));
-   for(let attempt=0;attempt<16;attempt++){
-    const candidate=attempt?49152+randomBytes(2).readUInt16BE()%16384:current.role==='exit'?51874:51820;if(reserved.has(candidate))continue;
-    try{await probeBindings([{host:'0.0.0.0',port:candidate,protocol:'udp'}]);return{listenPort:candidate};}catch{}
-   }throw new Error('无法自动分配隧道端口，请检查是否被其他程序占用');
-  }
-  if(action==='forget-network'){
-   const current=await state();if(current.role!=='relay'||current.networkDesired)throw new Error('请先停止中转隧道，再删除配对');
-   if(current.network){
-    const rules=JSON.parse((await call('ip',['-j','rule','show'])).stdout);
-    for(const rule of rules)if(ownsRouteRule(rule,current.network.uids))await call('ip',['rule','delete','pref',String(rule.priority),'protocol','196']);
-   }
-   await save({...current,network:null,networkDesired:false});await unlink(join(directory,'wireguard.conf')).catch(error=>{if(error.code!=='ENOENT')throw error;});return{forgotten:true};
+   return{uids,controlUid:accounts['vps-panel'].uid,panelPort:Number(env.VPS_PORT),physicalInterface:routes[0]?.dev||null,systemChangesEnabled:true};
   }
   if(action==='status'){
    const result={};for(const stream of streams)result[stream]=await status(stream);const current=await state();
@@ -361,7 +316,7 @@ export function createSystemDriver({directory='/etc/vps-panel',coreDirectory='/u
    return{accepted:true,disconnecting:true,purgeData:data.purgeData};
   }
   if(action==='logs'){
-   const names=['web','agent','worker','auth','network','guard','tcp-apply','tcp-acceleration',...streams.map(stream=>stream.replace('.','-'))];
+   const names=['web','agent','worker','auth','network','guard',...streams.map(stream=>stream.replace('.','-'))];
    if(!['all',...names].includes(data.target))throw new Error('日志目标错误');
    const selected=data.target==='all'?names:[data.target];
    const args=['--no-pager','--output=short-iso','--lines=300'];for(const name of selected)args.push('--unit','vps-panel-'+name+'.service');
@@ -398,7 +353,7 @@ export function createSystemDriver({directory='/etc/vps-panel',coreDirectory='/u
    await call('systemctl',[data.autoStart&&current.networkDesired&&!current.emergencyStop&&!tripped(directory,'emergency')&&!tripped(directory,'network')?'enable':'disable','vps-panel-network.service']);
    for(const stream of streams){
     const unit=unitFor(stream);await call('systemctl',[data.autoStart&&current.desired?.[stream]&&!current.emergencyStop&&!tripped(directory,'emergency')&&!tripped(directory,stream)?'enable':'disable',unit]);
-    const dropin=join(unitDirectory,unit+'.d');
+    const dropin=join('/etc/systemd/system',unit+'.d');
     // The path comes only from a fixed stream allowlist.
     await mkdir(dropin,{recursive:true,mode:0o755});
     await atomicWrite(join(dropin,'repair.conf'),`[Service]\nRestart=${data.autoRepair?'on-failure':'no'}\n`,0o644);

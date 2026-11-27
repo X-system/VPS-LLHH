@@ -14,13 +14,12 @@ const directory='/etc/vps-panel',data='/var/lib/vps-panel';
 if(tripped(directory,'emergency')||tripped(directory,stream))throw new Error('安全锁已停止该线路');
 const config=JSON.parse(readFileSync(join(directory,'system.json')));
 if(config.emergencyStop||!config.desired?.[stream])throw new Error('服务已手动停止或急停锁定');
-if(config.relay.enabledProtocols&&!config.relay.enabledProtocols.includes(stream.split('.')[0])||stream.endsWith('.att')&&config.relay.attEnabled===false)throw new Error('该协议或ATT出口尚未开通');
 const db=new DatabaseSync(join(data,'panel.sqlite'),{readOnly:true});
 const key=readFileSync(join(data,'master.key'));
 try{
  const get=name=>{const row=db.prepare('SELECT value FROM config WHERE key=?').get(name);return row?JSON.parse(row.value):null;};
  const runtime=get('runtime');if(!runtime||runtime.maintenance||runtime.emergencyStop||get('settings')?.role!=='relay')throw new Error('维护或急停状态禁止启动');
- const users=db.prepare('SELECT u.*,l.lines AS line_permissions,COALESCE(t.up,0) AS up,COALESCE(t.down,0) AS down FROM users u LEFT JOIN totals t ON t.user_id=u.id LEFT JOIN user_lines l ON l.user_id=u.id').all().map(row=>({...row,enabled:!!row.enabled,protocols:JSON.parse(row.protocols),exits:JSON.parse(row.exits),lines:row.line_permissions===null?undefined:JSON.parse(row.line_permissions),credentials:JSON.parse(decrypt(row.credentials,key))}));
+ const users=db.prepare('SELECT u.*,COALESCE(t.up,0) AS up,COALESCE(t.down,0) AS down FROM users u LEFT JOIN totals t ON t.user_id=u.id').all().map(row=>({...row,enabled:!!row.enabled,protocols:JSON.parse(row.protocols),exits:JSON.parse(row.exits),credentials:JSON.parse(decrypt(row.credentials,key))}));
  const generated=buildRelayConfigs(config.relay,users)[stream];
  if(stream.startsWith('hy2'))generated.tls={...generated.tls,cert:`/run/credentials/vps-panel-${stream.replace('.','-')}.service/fullchain.pem`,key:`/run/credentials/vps-panel-${stream.replace('.','-')}.service/privkey.pem`};
  const identities=JSON.parse(readFileSync(join(directory,'identities.json'))),uid=identities[stream];

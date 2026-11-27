@@ -114,10 +114,3 @@ test('在线快照缺少计数不清零；异常整批不计费，长时间采�
  assert.equal(f.store.db.prepare('SELECT up FROM totals WHERE user_id=?').get(f.id).up,150);
  assert.equal(f.store.get('live-traffic')[f.id]['hy2.att'].up,null);
 });
-
-test('Hy2逐条线路权限实时生效；协议和出口的组合不能扩大授权',async t=>{
- const f=await fixture(t);f.store.db.prepare('UPDATE users SET protocols=?,exits=? WHERE id=?').run('["vmess","hy2"]','["att","direct"]',f.id);
- f.store.db.prepare('INSERT INTO user_lines VALUES(?,?)').run(f.id,'["vmess.att","hy2.direct"]');
- assert.equal((await f.request()).ok,false);assert.equal((await f.request({exit:'direct'})).ok,true);
- f.store.db.prepare('UPDATE user_lines SET lines=? WHERE user_id=?').run('[]',f.id);assert.equal((await f.request({exit:'direct'})).ok,false);
-});

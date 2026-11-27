@@ -1,6 +1,5 @@
 import { isIP } from 'node:net';
 import { HttpError } from './validation.mjs';
-import{allowsLine}from'./line-permissions.mjs';
 
 function requireValue(condition,message){if(!condition)throw new HttpError(400,message);}
 const uuid=/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/;
@@ -10,13 +9,11 @@ export function port(value){requireValue(Number.isInteger(value)&&value>=1&&valu
 export function validateRelay(input){
   requireValue(input&&typeof input==='object','线路配置错误');
   requireValue(isIP(input.publicIPv4)===4,'本机公网IPv4错误');
-  const enabled=input.enabledProtocols??['vmess','hy2'];
-  requireValue(Array.isArray(enabled)&&enabled.length>0&&new Set(enabled).size===enabled.length&&enabled.every(value=>['vmess','hy2'].includes(value)),'请选择支持的协议');
-  requireValue(input.attEnabled===undefined||typeof input.attEnabled==='boolean','出口连接设置错误');
-  requireValue(typeof input.domain==='string'&&input.domain.length<=253&&(/^(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)+[A-Za-z]{2,63}$/.test(input.domain)||!enabled.includes('hy2')&&isIP(input.domain)===4),'Hy2需要有效域名；TCP可以使用公网IPv4');
+  requireValue(typeof input.domain==='string'&&input.domain.length<=253&&/^(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)+[A-Za-z]{2,63}$/.test(input.domain),'域名格式错误');
   const physical=interfaceName(input.physicalInterface),wg=interfaceName(input.wireguardInterface||'vps-wg');
   requireValue(physical!==wg,'物理网卡不能与隧道重名');
-  if(input.attEnabled!==false){requireValue(isIP(input.endpointIPv4)===4,'出口IP格式错误');port(input.endpointPort);publicKey(input.endpointPublicKey);}
+  requireValue(isIP(input.endpointIPv4)===4,'出口IP格式错误');port(input.endpointPort);
+  publicKey(input.endpointPublicKey);
   requireValue(input.ports&&input.uids&&input.stats,'缺少端口或服务身份配置');
   const taken=new Set();
   for(const protocol of ['vmess','hy2'])for(const exit of ['att','direct']){
@@ -45,7 +42,7 @@ export function buildRelayConfigs(raw,users,now=Date.now()){
   const config=validateRelay(raw),result={};
   for(const protocol of ['vmess','hy2'])for(const exit of ['att','direct']){
     const name=protocol+'.'+exit;
-    const selected=users.filter(user=>(!config.enabledProtocols||config.enabledProtocols.includes(protocol))&&(exit!=='att'||config.attEnabled!==false)&&user.enabled&&(!user.expires||user.expires>now)&&(user.quota===null||user.quota===undefined||(user.up||0)+(user.down||0)<user.quota)&&allowsLine(user,name));
+    const selected=users.filter(user=>user.enabled&&(!user.expires||user.expires>now)&&(user.quota===null||user.quota===undefined||(user.up||0)+(user.down||0)<user.quota)&&user.protocols.includes(protocol)&&user.exits.includes(exit));
     for(const user of selected){requireValue(uuid.test(user.id),'用户ID错误');requireValue(uuid.test(user.credentials.vmess),'VMess UUID错误');requireValue(/^[A-Za-z0-9_-]{24,128}$/.test(user.credentials.hy2),'Hy2凭证错误');}
     const device=exit==='att'?config.wireguardInterface:config.physicalInterface;
     const stats=config.stats[name];
@@ -85,7 +82,7 @@ ${['vmess','hy2'].map(protocol=>`  meta skuid ${config.uids[protocol+'.att']} ct
   oifname "lo" ip daddr 127.0.0.1 ct direction original tcp dport { ${Object.values(config.stats).map(stats=>stats.port).join(', ')} } meta skuid { ${[0,...(config.controlUid===undefined?[]:[config.controlUid])].join(', ')} } accept
   oifname "lo" ip daddr 127.0.0.1 ct direction original tcp dport { ${Object.values(config.stats).map(stats=>stats.port).join(', ')} } counter reject
 ${config.authServices?`  oifname "lo" ip daddr 127.0.0.1 ct direction original tcp dport ${config.authServices.port} meta skuid { ${[0,...(config.controlUid===undefined?[]:[config.controlUid]),...Object.values(config.uids)].join(', ')} } accept\n  oifname "lo" ip daddr 127.0.0.1 ct direction original tcp dport ${config.authServices.port} counter reject`:''}
-${config.attEnabled===false?'':`  meta mark 51820 oifname "${config.physicalInterface}" ip daddr ${config.endpointIPv4} udp dport ${config.endpointPort} accept`}
+  meta mark 51820 oifname "${config.physicalInterface}" ip daddr ${config.endpointIPv4} udp dport ${config.endpointPort} accept
 ${['vmess','hy2'].flatMap(protocol=>['att','direct'].map(exit=>{
   const uid=config.uids[protocol+'.'+exit],transport=protocol==='vmess'?'tcp':'udp',listen=config.ports[protocol][exit];
   const auth=protocol==='hy2'&&config.authServices?`  meta skuid ${uid} oifname "lo" ip daddr 127.0.0.1 tcp dport ${config.authServices.port} accept\n`:'';
@@ -99,13 +96,11 @@ ${['vmess','hy2'].flatMap(protocol=>['att','direct'].map(exit=>{
 `;
 }
 
-export function clientLinks(raw,user,{names={},states={},serverName='服务器'}={}){
+export function clientLinks(raw,user){
   const config=validateRelay(raw),links=[];
-  if(user.protocols.some(value=>!['vmess','hy2'].includes(value))||user.exits.some(value=>!['att','direct'].includes(value)))throw new HttpError(400,'协议或出口错误');
-  for(const protocol of ['vmess','hy2'])for(const exit of ['att','direct']){
-    const id=protocol+'.'+exit;if(!allowsLine(user,id))continue;
-    const base=names[id]||`${serverName} · ${protocol==='hy2'?'Hy2':'TCP'} · ${exit==='att'?'ATT':'直出'}`;
-    const label=base+(states[id]==='unavailable'?' | 当前不可用':states[id]==='unknown'?' | 状态待确认':'');
+  for(const protocol of user.protocols)for(const exit of user.exits){
+    if(!['vmess','hy2'].includes(protocol)||!['att','direct'].includes(exit))throw new HttpError(400,'协议或出口错误');
+    const label=`${user.name} · ${protocol==='hy2'?'Hy2':'TCP'} · ${exit==='att'?'ATT':'直出'}`;
     if(protocol==='hy2')links.push({protocol,exit,url:`hysteria2://${encodeURIComponent(user.credentials.hy2LegacyAuth===true?user.credentials.hy2:user.id+':'+user.credentials.hy2)}@${config.domain}:${config.ports.hy2[exit]}/?sni=${encodeURIComponent(config.domain)}&insecure=0#${encodeURIComponent(label)}`});
     else links.push({protocol,exit,url:'vmess://'+Buffer.from(JSON.stringify({v:'2',ps:label,add:config.domain,port:String(config.ports.vmess[exit]),id:user.credentials.vmess,aid:'0',scy:'auto',net:'tcp',type:'none',host:'',path:'',tls:''})).toString('base64')});
   }

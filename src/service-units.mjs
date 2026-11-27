@@ -172,17 +172,5 @@ RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX AF_NETLINK
 WantedBy=multi-user.target
 `;
  }
- units['vps-panel-tcp-acceleration.service']=`[Unit]
-Description=VPS Panel TCP Congestion Control
-After=systemd-sysctl.service bbrx-restore.service
-Before=network-pre.target
-[Service]
-Type=oneshot
-ExecStart=/usr/bin/flock --exclusive --nonblock /etc/vps-panel/tcp-acceleration.lock ${node} ${app}/src/tcp-acceleration-cli.mjs --boot
-TimeoutStartSec=45
-RemainAfterExit=yes
-[Install]
-WantedBy=multi-user.target
-`;
  return units;
 }

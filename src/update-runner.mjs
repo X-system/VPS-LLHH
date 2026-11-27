@@ -86,7 +86,7 @@ try{
   await download(request,join(stage,'release.tar.gz'));
   await command('/usr/bin/python3',[join(base,'app/scripts/extract_release.py'),join(stage,'release.tar.gz'),join(stage,'app')]);
   const manifest=JSON.parse(await readFile(join(stage,'app/release-manifest.json'),'utf8'));
-  if(manifest.version!==request.version||manifest.runtimeMajor!==24||manifest.schemaVersion!==2)throw new Error('发布版本或运行时不兼容');
+  if(manifest.version!==request.version||manifest.runtimeMajor!==24||manifest.schemaVersion!==1)throw new Error('发布版本或运行时不兼容');
   const installedComponents=JSON.parse(await readFile(join(base,'app/config/releases.json'),'utf8')),candidateComponents=JSON.parse(await readFile(join(stage,'app/config/releases.json'),'utf8'));
   if(['node','xray','hysteria'].some(name=>installedComponents[name]?.sha256!==candidateComponents[name]?.sha256))throw new Error('此版本包含核心或运行时变更，当前面板升级器尚不支持');
   await command(node,[join(base,'runtime/lib/node_modules/npm/bin/npm-cli.js'),'ci','--omit=dev','--ignore-scripts','--no-audit','--no-fund','--prefix',join(stage,'app')],180000);

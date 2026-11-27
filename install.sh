@@ -10,11 +10,20 @@ source /etc/os-release
 if [[ $ID != debian || ( $VERSION_ID != 12 && ! ( $VERSION_ID == 13 && ${VPS_INSTALL_TEST_DEBIAN13:-0} == 1 ) ) ]]; then echo '当前仅开放Debian 12安装；其他系统验收后开放。' >&2; exit 1; fi
 SOURCE=''
 RESTORE=0
-INSTALL_ROLE=${VPS_INSTALL_ROLE:-}
 while [[ $# -gt 0 ]]; do
- case "$1" in --source) SOURCE=${2:?缺少源码目录}; shift 2;; --restore) RESTORE=1;shift;; --role) INSTALL_ROLE=${2:?缺少安装角色};shift 2;;*) echo '使用：bash install.sh --source /绝对源码目录 [--role relay|exit] [--restore]' >&2; exit 1;; esac
+ case "$1" in --source) SOURCE=${2:?缺少源码目录}; shift 2;; --restore) RESTORE=1;shift;;*) echo '使用：bash install.sh --source /绝对源码目录 [--restore]' >&2; exit 1;; esac
 done
 [[ -n $SOURCE && $SOURCE = /* && -f $SOURCE/src/server.mjs && -f $SOURCE/config/releases.json ]] || { echo '请提供完整源码的绝对路径。' >&2; exit 1; }
+python3 - "$SOURCE" <<'VERSION_GUARD'
+import sys,json,pathlib,sqlite3
+source=pathlib.Path(sys.argv[1]);installed=pathlib.Path('/usr/local/lib/vps-panel/app/package.json')
+if installed.exists():assert json.loads(installed.read_text())['version']==json.loads((source/'package.json').read_text())['version'],'已安装其他版本，请使用面板更新；安装器不会覆盖现有版本'
+database=pathlib.Path('/var/lib/vps-panel/panel.sqlite')
+if database.exists():
+ connection=sqlite3.connect(database.as_uri()+'?mode=ro',uri=True)
+ try:assert connection.execute('PRAGMA user_version').fetchone()[0]<=1,'不能用旧版程序恢复新版数据库'
+ finally:connection.close()
+VERSION_GUARD
 for path in /usr/local/lib/vps-panel /etc/vps-panel /var/lib/vps-panel; do [[ ! -L $path ]] || { echo '安装目录不能是符号链接。';exit 1; };done
 if [[ -e /usr/local/lib/vps-panel/app ]]; then
  python3 - <<'PY'
@@ -24,24 +33,11 @@ assert path.is_file()and not path.is_symlink()and json.loads(path.read_text()).g
 PY
  EXISTING_HEALTHY=1
  for service in agent web auth worker; do systemctl is-active --quiet "vps-panel-$service.service" || EXISTING_HEALTHY=0;done
- if [[ $EXISTING_HEALTHY == 1 ]] && /usr/local/lib/vps-panel/runtime/bin/node --input-type=module - "$SOURCE" <<'JS'
-import{pathToFileURL}from'node:url';
-const{managementHealth}=await import(pathToFileURL(process.argv[2]+'/src/management-health.mjs'));
+ if [[ $EXISTING_HEALTHY == 1 ]] && /usr/local/lib/vps-panel/runtime/bin/node --input-type=module - <<'JS'
+import{managementHealth}from'/usr/local/lib/vps-panel/app/src/management-health.mjs';
 await managementHealth({attempts:60});
 JS
- then
-  if [[ ! -e /usr/local/lib/vps-panel/install-complete.json ]];then
-   printf '{"completed":true}\n' >/usr/local/lib/vps-panel/install-complete.json
-   chmod 600 /usr/local/lib/vps-panel/install-complete.json
-   echo '安装自检已补全，原账户和配置保持不变。'
-  else echo '面板已经安装，未更改现有账户和配置；更新请使用系统维护。';fi
-  vps-panel address
-  if [[ -f /var/lib/vps-panel/.bootstrap.json && -f /usr/local/lib/vps-panel/app/src/first-login.mjs ]];then
-   CURRENT_ORIGIN=$(sed -n 's/^VPS_ORIGIN=//p' /etc/vps-panel/web.env)
-   runuser -u vps-panel -- env VPS_DATA_DIR=/var/lib/vps-panel VPS_ORIGIN="$CURRENT_ORIGIN" /usr/local/lib/vps-panel/runtime/bin/node /usr/local/lib/vps-panel/app/src/first-login.mjs
-  fi
-  exit 0
- fi
+ then echo '面板已经安装，未更改现有账户和配置；更新请使用系统维护。';exit 0;fi
  if [[ -e /usr/local/lib/vps-panel/install-complete.json ]]; then echo '已安装的服务当前异常，请先使用SSH应急菜单恢复；不会覆盖现有数据。' >&2;exit 1;fi
  SOURCE=$(realpath -e -- "$SOURCE")
  [[ $SOURCE != /usr/local/lib/vps-panel && $SOURCE != /usr/local/lib/vps-panel/* ]] || { echo '修复未完成安装时，请从独立下载目录运行安装器。';exit 1; }
@@ -78,20 +74,9 @@ JS
  [[ ! -e $INCOMPLETE ]] || { echo '恢复备份目录冲突。';exit 1; }
  mv -- /usr/local/lib/vps-panel "$INCOMPLETE"
 fi
-if [[ $RESTORE == 0 && -z $INSTALL_ROLE ]];then
- echo '这台服务器负责什么？'
- echo '  1. 中转端：接入用户，可直接出网或连接 ATT 出口'
- echo '  2. 出口端：为已配对的中转机提供出口'
- [[ -r /dev/tty ]] || { echo '无人值守安装请指定 --role relay 或 --role exit。' >&2;exit 1; }
- while [[ -z $INSTALL_ROLE ]];do
-  read -r -p '请输入 1 或 2：' ROLE_CHOICE </dev/tty
-  case "$ROLE_CHOICE" in 1) INSTALL_ROLE=relay;;2) INSTALL_ROLE=exit;;*)echo '请输入数字1或2。' >&2;;esac
- done
-fi
-[[ $RESTORE == 1 || $INSTALL_ROLE == relay || $INSTALL_ROLE == exit ]] || { echo '安装角色必须为relay或exit。' >&2;exit 1; }
 export DEBIAN_FRONTEND=noninteractive
 apt-get update -qq
-apt-get install -y --no-install-recommends ca-certificates curl xz-utils unzip openssl nftables iproute2 wireguard-tools python3 util-linux kmod
+apt-get install -y --no-install-recommends ca-certificates curl xz-utils unzip openssl nftables iproute2 wireguard-tools python3 util-linux
 if ! unshare --net /bin/sh -eu -c '
  ip link add vps-probe type wireguard
  nft add table inet vps_panel_probe
@@ -200,7 +185,6 @@ for(const[name,contents]of Object.entries(serviceUnits()))writeFileSync('/etc/sy
 JS
 INIT_ARGS=()
 [[ $RESTORE == 0 ]] || INIT_ARGS+=(--restore)
-[[ $RESTORE == 1 ]] || INIT_ARGS+=(--role "$INSTALL_ROLE")
 INIT_RESULT=$(runuser -u vps-panel -- env VPS_DATA_DIR=/var/lib/vps-panel /usr/local/lib/vps-panel/runtime/bin/node /usr/local/lib/vps-panel/app/src/install-init.mjs "${INIT_ARGS[@]}")
 /usr/local/lib/vps-panel/runtime/bin/node --input-type=module - "$INIT_RESULT" "$PRESERVE_CERT" <<'JS'
 import{writeFileSync,readFileSync}from'node:fs';
@@ -226,12 +210,18 @@ fi
 import{managementHealth}from'/usr/local/lib/vps-panel/app/src/management-health.mjs';
 await managementHealth({attempts:60});
 JS
+HTTP_CODE=''
+for attempt in 1 2 3 4 5; do
+ HTTP_CODE=$(curl --noproxy '*' --cacert /etc/vps-panel/certs/panel-fullchain.pem --connect-to "$PANEL_IP:$PANEL_PORT:127.0.0.1:$PANEL_PORT" -sS --connect-timeout 2 --max-time 4 "https://$PANEL_IP:$PANEL_PORT/" -w '%{http_code}' -o /dev/null) || true
+ [[ $HTTP_CODE == 404 ]] && break
+ sleep 1
+done
+[[ $HTTP_CODE == 404 ]] || { echo '面板启动或根路径检查失败。' >&2; exit 1; }
 printf '{"completed":true}\n' >/usr/local/lib/vps-panel/install-complete.json
 chmod 600 /usr/local/lib/vps-panel/install-complete.json
 echo '面板已安装；所有代理线路仍处于停止状态。'
 echo '首次HTTPS为本机自签证书，域名证书需在网页配置。仅管理本程序规则，不重置现有防火墙。'
 VPS_ORIGIN="https://$PANEL_IP:$PANEL_PORT" vps-panel address
 echo '初始登录凭证：'
-runuser -u vps-panel -- env VPS_DATA_DIR=/var/lib/vps-panel VPS_ORIGIN="https://$PANEL_IP:$PANEL_PORT" /usr/local/lib/vps-panel/runtime/bin/node /usr/local/lib/vps-panel/app/src/first-login.mjs
-echo '首次通过IP打开时，如果浏览器提示初始证书未受信任，请核对上面的服务器IP，再选择“高级”继续访问。'
+if [[ -f /var/lib/vps-panel/.bootstrap.json ]]; then runuser -u vps-panel -- cat /var/lib/vps-panel/.bootstrap.json;else echo '恢复安装沿用原管理员密码。';fi
 printf '\nSSH备用管理：vps-panel\n'

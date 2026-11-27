@@ -1,9 +1,8 @@
 import{resolve}from'node:path';
 import{fileURLToPath}from'node:url';
 import{openStore}from'./store.mjs';
-import{agentRequest,retryAgentBusy}from'./agent-client.mjs';
+import{agentRequest}from'./agent-client.mjs';
 import{createAccessReconciler,streams,accessUsers}from'./access.mjs';
-import{allowsLine}from'./line-permissions.mjs';
 import{readHy2,readXray,kickHy2,ingestSnapshot}from'./collectors.mjs';
 import{collectHost}from'./telemetry.mjs';
 import{evaluateUserAlerts}from'./metrics.mjs';
@@ -65,14 +64,14 @@ export function createRuntimeWorker({store,request=agentRequest,collectHy2=readH
    for(const stream of streams){
     const status=profiles[stream];if(!status?.active||!status.epoch)continue;
     try{
-     const options={...config.stats[stream],ids:accessUsers(store).filter(user=>allowsLine(user,stream)).map(user=>user.id)};
+     const options={...config.stats[stream],ids:accessUsers(store).filter(user=>user.protocols.includes(stream.split('.')[0])&&user.exits.includes(stream.split('.')[1])).map(user=>user.id)};
      const samples=await(stream.startsWith('hy2')?collectHy2(options):collectXray(options));
      ingestSnapshot(store,{stream,epoch:status.epoch,samples});
      store.set('collector-health.'+stream,{at:store.clock(),ok:true});
     }catch{
      store.set('collector-health.'+stream,{at:store.clock(),ok:false});
      // Stop an unmetered line if it serves users with an enforced quota.
-     const quota=accessUsers(store).some(user=>user.enabled&&user.quota!==null&&allowsLine(user,stream));
+     const quota=store.db.prepare('SELECT protocols,exits FROM users WHERE enabled=1 AND quota IS NOT NULL').all().some(user=>JSON.parse(user.protocols).includes(stream.split('.')[0])&&JSON.parse(user.exits).includes(stream.split('.')[1]));
      if(quota){await request('stop',{stream});profiles[stream].active=false;store.audit('额度线路统计失效，已停止受影响线路',{stream});}
     }
    }
@@ -88,7 +87,7 @@ export function createRuntimeWorker({store,request=agentRequest,collectHy2=readH
     onlineIds:async stream=>(await collectHy2(config.stats[stream])).filter(item=>item.connections>0).map(item=>item.id),
     kick:(stream,ids)=>kick(config.stats[stream],ids),
     stop:stream=>request('stop',{stream}),
-    replaceTcp:async(stream,users)=>{profiles[stream]=await retryAgentBusy(()=>request('replace-tcp',{stream,users}));}
+    replaceTcp:async(stream,users)=>{profiles[stream]=await request('replace-tcp',{stream,users});}
    }});
    await reconcile();
    evaluateUserAlerts(store);

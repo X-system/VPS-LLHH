@@ -28,7 +28,7 @@ export function installMobile(ctx){
   const dismiss=document.createElement('button');dismiss.className='mobile-menu-close mobile-only';dismiss.type='button';dismiss.setAttribute('aria-label','关闭导航菜单');dismiss.textContent='×';aside.prepend(dismiss);
   const backdrop=document.createElement('button');backdrop.className='mobile-backdrop';backdrop.hidden=true;backdrop.setAttribute('aria-label','关闭菜单遮罩');root.append(backdrop);
   const bottom=document.createElement('nav');bottom.className='mobile-bottom-nav mobile-only';bottom.setAttribute('aria-label','常用功能');
-  const definitions=ctx.state.meta.uiVersion>=2?[['overview','dashboard','首页'],...(ctx.state.meta.role==='exit'?[]:[['users','users','用户']]),['traffic','traffic','流量'],['services','network','配置'],['settings','settings','设置']]:[['overview','dashboard','首页'],['users','users',ctx.state.meta.role==='exit'?'中转机':'用户'],['traffic','traffic','流量'],['lines','network','线路']];
+  const definitions=[['overview','dashboard','首页'],['users','users',ctx.state.meta.role==='exit'?'中转机':'用户'],['traffic','traffic','流量'],['lines','network','线路']];
   for(const[id,symbol,label]of definitions){const b=document.createElement('button');b.type='button';b.dataset.page=id;b.dataset.mobileGo=id;b.innerHTML=icon(symbol)+'<span>'+label+'</span>';b.classList.toggle('active',ctx.state.page===id);bottom.append(b);}root.append(bottom);close({restoreFocus:false});
  }
  function tables(scope){

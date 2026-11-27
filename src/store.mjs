@@ -4,7 +4,6 @@ import { join } from 'node:path';
 import { randomBytes, randomUUID } from 'node:crypto';
 import { hashPassword, newEntrance, token, digest, encrypt, decrypt } from './security.mjs';
 import { addLineUsage } from './line-usage.mjs';
-import { addUserUsage } from './user-ledger.mjs';
 
 export async function openStore({ directory, password, clock = Date.now }) {
   mkdirSync(directory, { recursive: true, mode: 0o700 });
@@ -15,7 +14,7 @@ export async function openStore({ directory, password, clock = Date.now }) {
   const key = readFileSync(keyPath);
   if (key.length !== 32) throw new Error('主密钥格式错误，不能自动覆盖');
   const db = new DatabaseSync(path);
-  if(db.prepare('PRAGMA user_version').get().user_version>2){db.close();throw new Error('数据库来自更新的版本，请使用匹配版本；不会降级修改数据');}
+  if(db.prepare('PRAGMA user_version').get().user_version>1){db.close();throw new Error('数据库来自更新版本，不能降级');}
   chmodSync(path, 0o600);
   db.exec(`PRAGMA foreign_keys=ON; PRAGMA journal_mode=WAL; PRAGMA busy_timeout=5000;
     CREATE TABLE IF NOT EXISTS config (key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -24,21 +23,17 @@ export async function openStore({ directory, password, clock = Date.now }) {
     CREATE TABLE IF NOT EXISTS users (id TEXT PRIMARY KEY, name TEXT NOT NULL, enabled INTEGER NOT NULL DEFAULT 1, protocols TEXT NOT NULL, exits TEXT NOT NULL, quota INTEGER, expires INTEGER, credentials TEXT NOT NULL, created INTEGER NOT NULL);
     CREATE TABLE IF NOT EXISTS subscriptions (token TEXT PRIMARY KEY, user_id TEXT NOT NULL UNIQUE REFERENCES users(id) ON DELETE CASCADE);
     CREATE TABLE IF NOT EXISTS user_presence (user_id TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE, seen INTEGER NOT NULL);
-    CREATE TABLE IF NOT EXISTS user_lines (user_id TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE, lines TEXT NOT NULL);
-    CREATE TABLE IF NOT EXISTS user_days (user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,day TEXT NOT NULL,period TEXT NOT NULL,up INTEGER NOT NULL,down INTEGER NOT NULL,PRIMARY KEY(user_id,day));
-    CREATE TABLE IF NOT EXISTS deleted_days (day TEXT PRIMARY KEY,period TEXT NOT NULL,up INTEGER NOT NULL,down INTEGER NOT NULL);
     CREATE TABLE IF NOT EXISTS audit (id INTEGER PRIMARY KEY, at INTEGER NOT NULL, event TEXT NOT NULL, detail TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS events (id TEXT PRIMARY KEY, at INTEGER NOT NULL, type TEXT NOT NULL, payload TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'pending', attempts INTEGER NOT NULL DEFAULT 0);
     CREATE TABLE IF NOT EXISTS traffic (user_id TEXT NOT NULL, stream TEXT NOT NULL, epoch TEXT NOT NULL, up INTEGER NOT NULL, down INTEGER NOT NULL, at INTEGER NOT NULL, PRIMARY KEY(user_id,stream));
     CREATE TABLE IF NOT EXISTS totals (user_id TEXT PRIMARY KEY, up INTEGER NOT NULL DEFAULT 0, down INTEGER NOT NULL DEFAULT 0, last_activity INTEGER);
     CREATE TABLE IF NOT EXISTS line_periods (period TEXT NOT NULL,stream TEXT NOT NULL,up INTEGER NOT NULL,down INTEGER NOT NULL,first_at INTEGER NOT NULL,last_at INTEGER NOT NULL,PRIMARY KEY(period,stream));
     CREATE TABLE IF NOT EXISTS monitor_history (at INTEGER PRIMARY KEY,data TEXT NOT NULL);
-    PRAGMA user_version=2;`);
+    PRAGMA user_version=1;`);
   if (!db.prepare('PRAGMA table_info(events)').all().some(column=>column.name==='next_at')) db.exec('ALTER TABLE events ADD COLUMN next_at INTEGER NOT NULL DEFAULT 0');
   const get = name => { const row = db.prepare('SELECT value FROM config WHERE key=?').get(name); return row ? JSON.parse(row.value) : undefined; };
   const set = (name, value) => db.prepare('INSERT INTO config(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value').run(name, JSON.stringify(value));
   if(get('line-metering-started')===undefined)set('line-metering-started',clock());
-  if(get('user-metering-started')===undefined)set('user-metering-started',clock());
   let transactionDepth=0,savepointSequence=0;
   const transaction = fn => {
     const nested=transactionDepth>0,name='vps_sp_'+(++savepointSequence);
@@ -84,7 +79,6 @@ export async function openStore({ directory, password, clock = Date.now }) {
       const total=db.prepare('SELECT up,down FROM totals WHERE user_id=?').get(userId)||{up:0,down:0};
       if(![total.up+deltaUp,total.down+deltaDown,total.up+deltaUp+total.down+deltaDown].every(Number.isSafeInteger))throw new Error('累计流量超出可精确计数范围');
       addLineUsage({db},{stream,up:deltaUp,down:deltaDown,at:clock()});
-      addUserUsage({db},{userId,up:deltaUp,down:deltaDown,at:clock()});
       db.prepare('INSERT INTO traffic VALUES(?,?,?,?,?,?) ON CONFLICT(user_id,stream) DO UPDATE SET epoch=excluded.epoch,up=excluded.up,down=excluded.down,at=excluded.at').run(userId, stream, epoch, up, down, clock());
       db.prepare('INSERT INTO totals(user_id,up,down,last_activity) VALUES(?,?,?,?) ON CONFLICT(user_id) DO UPDATE SET up=up+excluded.up,down=down+excluded.down,last_activity=COALESCE(excluded.last_activity,last_activity)').run(userId, deltaUp, deltaDown, deltaUp + deltaDown ? clock() : null);
       return { up: deltaUp, down: deltaDown };

@@ -4,7 +4,6 @@ import{validateRelay}from'./core-config.mjs';
 import{accessUsers,streams}from'./access.mjs';
 import{HttpError}from'./validation.mjs';
 import{createHash}from'node:crypto';
-import{allowsLine}from'./line-permissions.mjs';
 
 export function readSecret(store,key){const encoded=store.get(key);return encoded?JSON.parse(store.unseal(encoded)):null;}
 export function networkIdentity(store){
@@ -29,18 +28,18 @@ export async function saveNetwork(store,data,request){
 }
 export function relayView(store){
  const active=readSecret(store,'relay-config'),config=active||readSecret(store,'relay-pending');if(!config)return{configured:false};
- return{configured:!!active,needsConfirmation:!active,domain:config.domain,publicIPv4:config.publicIPv4,physicalInterface:config.physicalInterface,ports:config.ports,enabledProtocols:config.enabledProtocols||['vmess','hy2'],attEnabled:config.attEnabled!==false};
+ return{configured:!!active,needsConfirmation:!active,domain:config.domain,publicIPv4:config.publicIPv4,physicalInterface:config.physicalInterface,ports:config.ports};
 }
 export async function saveRelay(store,data,request){
  if(store.get('settings').role!=='relay')throw new HttpError(409,'出口机没有代理协议入口');
- if(!data||typeof data!=='object'||Object.keys(data).some(key=>!['domain','publicIPv4','ports','enabledProtocols','attEnabled'].includes(key)))throw new HttpError(400,'存在不支持的线路字段');
- const network=readSecret(store,'network-config');if(data.attEnabled!==false&&!network)throw new HttpError(409,'请先完成ATT配对，或选择仅使用直出');
+ if(!data||typeof data!=='object'||Object.keys(data).some(key=>!['domain','publicIPv4','ports'].includes(key)))throw new HttpError(400,'存在不支持的线路字段');
+ const network=readSecret(store,'network-config');if(!network)throw new HttpError(409,'请先完成WG配对配置');
  const info=await request('inspect'),previous=readSecret(store,'relay-config')||readSecret(store,'relay-pending');
  const authServices=previous?.authServices||{port:18444,secrets:{'hy2.att':token(),'hy2.direct':token()}};
  const stats=previous?.stats||{'vmess.att':{port:19001},'vmess.direct':{port:19002},'hy2.att':{port:19003,secret:token()},'hy2.direct':{port:19004,secret:token()}};
- const peer=network?.peers[0];
- const config=validateRelay({...data,physicalInterface:network?.physicalInterface||info.physicalInterface,wireguardInterface:network?.wireguardInterface||'vps-wg',endpointIPv4:peer?.endpointIPv4,endpointPort:peer?.endpointPort,endpointPublicKey:peer?.publicKey,uids:info.uids,controlUid:info.controlUid,stats,authServices});
- if(Object.values(config.ports).some(group=>Object.values(group).some(value=>[network?.listenPort,info.panelPort||18443].includes(value))))throw new HttpError(400,'协议入口不能占用管理或WG端口');
+ const peer=network.peers[0];
+ const config=validateRelay({...data,physicalInterface:network.physicalInterface,wireguardInterface:network.wireguardInterface,endpointIPv4:peer.endpointIPv4,endpointPort:peer.endpointPort,endpointPublicKey:peer.publicKey,uids:info.uids,controlUid:info.controlUid,stats,authServices});
+ if(Object.values(config.ports).some(group=>Object.values(group).some(value=>[network.listenPort,info.panelPort||18443].includes(value))))throw new HttpError(400,'协议入口不能占用管理或WG端口');
  store.set('runtime',{...store.get('runtime'),maintenance:true});
  await request('configure-relay',{config,users:accessUsers(store)});
  store.transaction(()=>{store.set('relay-config',store.seal(JSON.stringify(config)));store.set('relay-pending',null);store.set('auth-services',store.seal(JSON.stringify(authServices.secrets)));store.set('access-applied',{});store.audit('保存代理线路并保持停止');});
@@ -53,7 +52,6 @@ export async function serviceAction(store,input,request){
  if(['start','restart'].includes(action)){
   if(store.get('runtime')?.emergencyStop)throw new HttpError(409,'请先解除急停');
   if(!readSecret(store,'relay-config'))throw new HttpError(409,'请先配置代理线路');
-  if(input.stream.endsWith('.att')&&!readSecret(store,'network-config'))throw new HttpError(409,'请先连接ATT出口');
   store.set('runtime',{...store.get('runtime'),maintenance:false});
  }
  if(['stop-all','emergency-stop'].includes(action))store.set('runtime',{...store.get('runtime'),maintenance:true,emergencyStop:action==='emergency-stop'||!!store.get('runtime')?.emergencyStop});
@@ -65,7 +63,7 @@ export async function serviceAction(store,input,request){
  }
  if(action==='policy'&&(typeof input.autoStart!=='boolean'||typeof input.autoRepair!=='boolean'))throw new HttpError(400,'自启动和修复设置错误');
  let result;
- try{result=await request(action,{stream:input.stream,confirmed:input.confirmed,autoStart:input.autoStart,autoRepair:input.autoRepair,...(Object.hasOwn(input,'expectedAutomationToken')?{expectedAutomationToken:input.expectedAutomationToken}:{})});}
+ try{result=await request(action,{stream:input.stream,confirmed:input.confirmed,autoStart:input.autoStart,autoRepair:input.autoRepair});}
  catch(error){throw new HttpError(502,error.code==='AGENT_ERROR'?error.message:'系统操作未完成，请查看诊断；停止及急停意图已保留');}
  if(action==='release-emergency')store.set('runtime',{...store.get('runtime'),emergencyStop:!!result.emergencyStop,maintenance:true});
  if(action==='policy')store.set('settings',{...store.get('settings'),autoStart:input.autoStart,autoRepair:input.autoRepair});
@@ -81,7 +79,7 @@ export function liveUsers(store,rows){
    return fresh&&statuses.profiles[stream]?.active&&health?.ok&&now-health.at<=20000&&record&&now-record.at<=20000?record:null;
   }).filter(Boolean);
   const known=values.filter(item=>item.connections!==null);
-  const relevant=streams.filter(stream=>allowsLine(user,stream));
+  const relevant=streams.filter(stream=>user.protocols.includes(stream.split('.')[0])&&user.exits.includes(stream.split('.')[1]));
   const active=fresh?relevant.filter(stream=>statuses.profiles[stream]?.active):[];
   let synchronized=false;
   if(active.length){const encoded=credentials.get(user.id)?.credentials;if(encoded){const secret=JSON.parse(store.unseal(encoded));synchronized=active.every(stream=>applied[stream]?.epoch===statuses.profiles[stream].epoch&&applied[stream].users?.[user.id]===createHash('sha256').update(secret[stream.split('.')[0]]).digest('hex'));}}

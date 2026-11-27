@@ -186,13 +186,3 @@ test('生产HTTPS缺失时拒绝启动；系统功能不返回成功占位',asyn
  test('历史监控接口需要登录、校验范围且不制造空白时段记录',async t=>{const f=await fixture(t);assert.equal((await f.request('api/history')).status,401);await f.login();const response=await f.auth('api/history?range=24h');assert.equal(response.status,200);const data=await response.json();assert.deepEqual(data.points,[]);assert.equal(data.range,'24h');assert.equal(data.fresh,false);assert.equal((await f.auth('api/history?range=7d')).status,400);});
 
 test('服务健康接口只读、需要认证；设置只接受启用开关',async t=>{const f=await fixture(t);assert.equal((await f.request('api/health')).status,401);await f.login();const response=await f.auth('api/health');assert.equal(response.status,200);const health=await response.json();assert.equal(health.state,'grey');assert.equal(health.rows.find(r=>r.id==='controller').state,'grey');assert.equal(health.readOnly,true);assert.equal((await f.auth('api/health/settings',{method:'PUT',data:{probeEnabled:false,target:'127.0.0.1'}})).status,400);assert.equal((await f.auth('api/health/settings',{method:'PUT',data:{probeEnabled:false}})).status,200);assert.equal((await(await f.auth('api/health/settings')).json()).probeEnabled,false);});
-
-test('TCP加速管理需要登录与CSRF，三选一校验，不接收任意命令',async t=>{
- const calls=[],f=await fixture(t,{systemRequest:async(action,data)=>{calls.push({action,data});return{mode:data?.mode||'off',effective:'cubic',bbrxSupported:true};}});
- assert.equal((await f.request('api/tcp-acceleration')).status,401);await f.login();
- assert.equal((await f.auth('api/tcp-acceleration')).status,200);
- assert.equal((await f.auth('api/tcp-acceleration',{method:'PUT',data:{mode:'bbrx'},headers:{'X-CSRF-Token':'wrong'}})).status,403);
- for(const data of[{mode:'bbr;reboot'},{mode:'bbr',command:'reboot'}])assert.equal((await f.auth('api/tcp-acceleration',{method:'PUT',data})).status,400);
- for(const mode of['off','bbr','bbrx'])assert.equal((await f.auth('api/tcp-acceleration',{method:'PUT',data:{mode}})).status,202);
- assert.deepEqual(calls.filter(v=>v.action==='tcp-acceleration-set').map(v=>v.data.mode),['off','bbr','bbrx']);
-});

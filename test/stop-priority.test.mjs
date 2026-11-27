@@ -53,11 +53,3 @@ test('管理器慢操作不阻塞状态查询和急停，其他写操作仍被�
   assert.ok(calls.includes('emergency-stop'));assert.ok(!calls.includes('start'));
  }finally{resume.resolve();await(await slow).json();}
 });
-
-test('自动配置只能使用当前停止代次，手动停止后旧代次不能开启或更改策略',async t=>{
- const path=directory(t),calls=[];writeFileSync(join(path,'system.json'),JSON.stringify({autoStart:false,autoRepair:false,desired:{}}));
- const driver=createSystemDriver({directory:path,unitDirectory:join(path,'unit-files'),runner:async(binary,args)=>{calls.push([binary,args]);return{stdout:inactive};}});
- await driver.action('policy',{autoStart:true,autoRepair:true,expectedAutomationToken:null});await driver.action('stop-all');assert.ok(readFuse(path,'automation'));
- const before=calls.length;await assert.rejects(driver.action('policy',{autoStart:true,autoRepair:true,expectedAutomationToken:null}),/手动停止/);await assert.rejects(driver.action('start',{stream:'vmess.direct',expectedAutomationToken:null}),/手动停止/);assert.equal(calls.length,before);
- const rebuilt=createSystemDriver({directory:path,unitDirectory:join(path,'unit-files'),runner:async()=>({stdout:inactive})});await assert.rejects(rebuilt.action('network-up',{expectedAutomationToken:null}),/手动停止/);
-});

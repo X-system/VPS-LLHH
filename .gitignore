@@ -15,6 +15,3 @@ playwright-report/
 dist/
 backups/
 *.backup
-
-__pycache__/
-*.py[cod]

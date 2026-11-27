@@ -1,4 +1,3 @@
-import{checkLines}from'./line-permissions.mjs';
 export class HttpError extends Error {
   constructor(status, message) { super(message); this.status = status; }
 }
@@ -21,7 +20,7 @@ export function settings(input, prior) {
 }
 export function user(input) {
   if (!input || Array.isArray(input)) throw new HttpError(400, '用户格式错误');
-  const allowed = new Set(['name','enabled','protocols','exits','quota','expires','lines']);
+  const allowed = new Set(['name','enabled','protocols','exits','quota','expires']);
   if (Object.keys(input).some(key => !allowed.has(key))) throw new HttpError(400, '存在不支持的用户字段');
   const name = text(input.name, '用户名称', { max: 48 });
   const protocols = input.protocols ?? ['hy2'];
@@ -31,7 +30,5 @@ export function user(input) {
   }
   if (input.enabled !== undefined && typeof input.enabled !== 'boolean') throw new HttpError(400, '启用状态不正确');
   for (const value of [input.quota,input.expires]) if (value !== undefined && value !== null && (!Number.isSafeInteger(value) || value < 0)) throw new HttpError(400, '额度或到期时间不正确');
-  const lines=input.lines===undefined?undefined:checkLines(input.lines);
-  if(lines?.some(id=>!protocols.includes(id.split('.')[0])||!exits.includes(id.split('.')[1])))throw new HttpError(400,'线路必须属于该用户允许的协议和出口');
-  return { name, enabled: input.enabled ?? true, protocols, exits, quota: input.quota ?? null, expires: input.expires ?? null,...(lines===undefined?{}:{lines}) };
+  return { name, enabled: input.enabled ?? true, protocols, exits, quota: input.quota ?? null, expires: input.expires ?? null };
 }

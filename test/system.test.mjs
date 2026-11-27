@@ -6,7 +6,6 @@ import{join}from'node:path';
 import{createSystemDriver}from'../src/system-driver.mjs';
 import{serviceUnits}from'../src/service-units.mjs';
 import{createAgent}from'../src/agent.mjs';
-import{retryAgentBusy}from'../src/agent-client.mjs';
 import{openStore}from'../src/store.mjs';
 import{saveNetwork,networkView,saveRelay,serviceAction,relayView,readSecret,liveUsers}from'../src/deployment.mjs';
 import{wgKeys}from'../src/network.mjs';
@@ -63,7 +62,7 @@ test('网页保存配对和协议只停不启动，密钥不回显，输入不�
  store.set('runtime',{maintenance:true,emergencyStop:true});await assert.rejects(serviceAction(store,{action:'start',stream:'hy2.att'},request));
 });
 test('系统服务独立认证/统计、低权限核心，启动前重新检查额度；重启有退避限制',()=>{
- const units=serviceUnits();assert.equal(Object.keys(units).length,11);
+ const units=serviceUnits();assert.equal(Object.keys(units).length,10);
  for(const stream of['vmess-att','vmess-direct','hy2-att','hy2-direct']){
   const text=units['vps-panel-'+stream+'.service'];assert.ok(text.includes('User=vps-panel-'+stream));
   assert.ok(text.includes('src/core-prestart.mjs '+stream.replace('-','.')));assert.ok(text.includes('StartLimitBurst=5'));
@@ -119,21 +118,4 @@ test('核心运行不等于新用户权限已生效；凭证变更后重新显�
  assert.equal(liveUsers(store,[row])[0].deployment,'已部署');
  store.db.prepare('UPDATE users SET credentials=? WHERE id=?').run(store.seal(JSON.stringify(newCredentials())),id);
  assert.equal(liveUsers(store,[row])[0].deployment,'等待权限同步');
-});
-
-test('系统传输允许Hy2证书更新动作中的数字，非法格式不会到达执行器',async t=>{
- const calls=[],agent=createAgent({driver:{action:async(action,data)=>{calls.push({action,data});return{active:true,epoch:'renewed'};}}});
- await new Promise(resolve=>agent.server.listen(0,'127.0.0.1',resolve));t.after(()=>agent.close());
- const url='http://127.0.0.1:'+agent.server.address().port;
- const request=action=>fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action,data:{stream:'hy2.att'}})});
- const valid=await request('reload-hy2-certificate');assert.equal(valid.status,200);assert.equal((await valid.json()).epoch,'renewed');
- for(const action of['reload-hy2-certificate;reboot','Reload-hy2-certificate','2reload','reload/hy2-certificate'])assert.equal((await request(action)).status,400);
- assert.deepEqual(calls,[{action:'reload-hy2-certificate',data:{stream:'hy2.att'}}]);
-});
-
-test('权限同步仅重试明确的管理器占用，达到上限或其他错误仍失败',async()=>{
- let calls=0;const busy=()=>Object.assign(new Error('busy'),{code:'AGENT_ERROR',statusCode:409});
- assert.equal(await retryAgentBusy(async()=>{if(++calls<3)throw busy();return'ok';},{attempts:3,delay:1}),'ok');assert.equal(calls,3);
- calls=0;await assert.rejects(retryAgentBusy(async()=>{calls++;throw busy();},{attempts:3,delay:1}));assert.equal(calls,3);
- calls=0;await assert.rejects(retryAgentBusy(async()=>{calls++;throw Object.assign(new Error('failed'),{code:'AGENT_ERROR',statusCode:500});},{attempts:3,delay:1}));assert.equal(calls,1);
 });
