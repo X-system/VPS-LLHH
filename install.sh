@@ -20,7 +20,7 @@ import sys,json,pathlib,sqlite3
 source=pathlib.Path(sys.argv[1]);installed=pathlib.Path('/usr/local/lib/vps-panel/app/package.json')
 if installed.exists():assert json.loads(installed.read_text())['version']==json.loads((source/'package.json').read_text())['version'],'已安装其他版本，请使用面板更新；安装器不会覆盖现有版本'
 system=pathlib.Path('/etc/vps-panel/system.json')
-if installed.exists()and sys.argv[2]and system.exists():assert json.loads(system.read_text())['role']==sys.argv[2],'已安装其他角色，请在面板内受控切换角色；安装器不会覆盖'
+if sys.argv[2]and system.exists():assert json.loads(system.read_text())['role']==sys.argv[2],'已安装其他角色，请在面板内受控切换角色；安装器不会覆盖'
 database=pathlib.Path('/var/lib/vps-panel/panel.sqlite')
 if database.exists():
  connection=sqlite3.connect(database.as_uri()+'?mode=ro',uri=True)
