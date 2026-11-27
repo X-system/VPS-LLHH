@@ -10,6 +10,6 @@ test('最后在线时间按分钟展示相对时间，同时提供完整时间�
  }
  assert.equal(lastOnline({online:true,last_online:seen}).label,'当前在线');
  assert.equal(lastOnline({online:null,last_online:seen},{now:seen+5*60000}).label,'5分钟前在线');
- assert.equal(lastOnline({online:null,last_online:null}).label,'尚无在线记录');
+ assert.equal(lastOnline({online:null,last_online:null}).label,'从未上线');
  assert.equal(lastOnline({online:false,last_online:seen},{now:seen-120000}).label,'时间待校准');
 });

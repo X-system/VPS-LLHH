@@ -10,6 +10,7 @@ import{evaluateUserAlerts}from'./metrics.mjs';
 import{ingestTunnel}from'./tunnel-stats.mjs';
 import{enqueueEvent}from'./bark.mjs';
 import{evaluateConnectionAlerts}from'./line-state.mjs';
+import{observeUpdateNotices}from'./update-notices.mjs';
 import{execFile}from'node:child_process';
 import{promisify}from'node:util';
 
@@ -21,6 +22,7 @@ export function createRuntimeWorker({store,request=agentRequest,collectHy2=readH
   try{
    const system=await request('status');const {profiles,desired={},certificate,emergencyStop,network:networkStatus,networkDesired,autoRepair,guardPresent,panelUseAcme,maintenance={}}=system;
    evaluateConnectionAlerts(store,system);
+   observeUpdateNotices(store,system.updates);
    store.set('service-status',{at:store.clock(),profiles});
    const observed=store.get('maintenance-observed')||{};
    for(const[kind,job]of Object.entries(maintenance))if(['update','panel'].includes(kind)&&Number.isSafeInteger(job.at)&&job.at!==observed[kind]){

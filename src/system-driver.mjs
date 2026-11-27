@@ -312,7 +312,7 @@ export function createSystemDriver({directory='/etc/vps-panel',coreDirectory='/u
   if(action==='status'){
    const result={};for(const stream of streams)result[stream]=await status(stream);const current=await state();
    let certificate;try{certificate=await certificates.status();}catch{certificate={ok:false,error:'证书状态无法读取，请检查本机证书配置'};}
-   return{profiles:result,desired:Object.fromEntries(streams.map(stream=>[stream,!!current.desired?.[stream]&&!tripped(directory,stream)])),guardPresent:await guardStatus(),panelUseAcme:!!current.panelUseAcme,certificate,network:await networkStatus(),networkDesired:!!current.networkDesired&&!tripped(directory,'network'),autoRepair:!!current.autoRepair,emergencyStop:!!current.emergencyStop||tripped(directory,'emergency'),maintenance:await maintenanceState()};
+   return{profiles:result,desired:Object.fromEntries(streams.map(stream=>[stream,!!current.desired?.[stream]&&!tripped(directory,stream)])),guardPresent:await guardStatus(),panelUseAcme:!!current.panelUseAcme,certificate,network:await networkStatus(),networkDesired:!!current.networkDesired&&!tripped(directory,'network'),autoRepair:!!current.autoRepair,emergencyStop:!!current.emergencyStop||tripped(directory,'emergency'),maintenance:await maintenanceState(),updates:await updates.status()};
   }
   if(action==='repair-guard'){
    const current=await state();if(!current.autoRepair||current.emergencyStop||tripped(directory,'emergency'))return{skipped:true};

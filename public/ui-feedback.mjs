@@ -14,7 +14,7 @@ export function feedbackAnchor(){return lastControl?.isConnected?lastControl:las
 export function actionFeedback(owner,message,{kind='success',duration=6000}={}){
  if(owner&&!owner.isConnected){owner=replacement(descriptor(owner));if(!owner)return;}
  owner=owner||feedbackAnchor();
- if(!owner){owner=document.querySelector('dialog[open] button,.page-heading button,#app button');}
+ if(!owner){owner=document.querySelector('dialog[open] button,#page .primary,#page button:not([data-page]),.onboarding-main button');}
  if(!owner)return;
  let entry=messages.get(owner);
  if(!entry||!entry.node.isConnected){

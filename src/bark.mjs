@@ -10,7 +10,7 @@ export const eventTypes = {
   'service.failed':'服务异常','tunnel.failed':'隧道异常','certificate.failed':'证书续签失败',
   'repair.started':'正在尝试修复','repair.succeeded':'修复成功','repair.failed':'自动修复失败',
   'maintenance.failed':'维护操作失败','service.started':'线路已启动','service.stopped':'线路已停止','service.recovered':'线路已恢复',
-  'upstream.disconnected':'上游服务器断开','upstream.connected':'上游服务器恢复连接','bark.test':'推送通道测试'
+  'upstream.disconnected':'中转机连接断开','upstream.connected':'中转机恢复连接','update.status':'更新状态提醒','bark.test':'推送通道测试'
 };
 export function parseBarkLink(value){
   if(typeof value!=='string'||value.trim().length>4096)throw new HttpError(400,'请粘贴Bark提供的完整推送链接');
@@ -89,11 +89,11 @@ export function enqueueEvent(store,type,data,{cooldown=30*60000,key=type}={}) {
     store.set('event-cooldowns',Object.fromEntries(recent));return id;
   });
 }
-export async function dispatchEvents(store,{fetchImpl=fetch,origin,max=5,delegate=event=>delegateNotification(store,event)}={}) {
+export async function dispatchEvents(store,{fetchImpl=fetch,origin,max=5,eventId,delegate=event=>delegateNotification(store,event)}={}) {
   if(store.get('notification-profiles')?.enabled===false)return;
   const encoded=store.get('bark');if(!encoded)return;
   const config=JSON.parse(store.unseal(encoded));
-  const rows=store.db.prepare("SELECT * FROM events WHERE status='pending' AND attempts<5 AND next_at<=? ORDER BY at LIMIT ?").all(store.clock(),max);
+  const rows=eventId?store.db.prepare("SELECT * FROM events WHERE id=? AND status='pending' AND attempts<5 AND next_at<=? LIMIT 1").all(eventId,store.clock()):store.db.prepare("SELECT * FROM events WHERE status='pending' AND attempts<5 AND next_at<=? ORDER BY at LIMIT ?").all(store.clock(),max);
   for (const row of rows) {
     if(store.get('notification-profiles')?.enabled===false)break;
     if (!config.events.includes(row.type) && row.type!=='bark.test') {store.db.prepare("UPDATE events SET status='disabled' WHERE id=?").run(row.id);continue;}
@@ -102,7 +102,7 @@ export async function dispatchEvents(store,{fetchImpl=fetch,origin,max=5,delegat
     if(row.type==='entrance.rotated'&&data.entrance!==store.get('entrance').value||row.type==='panel.changed'&&data.origin&&origin&&data.origin!==origin){store.db.prepare("UPDATE events SET status='superseded' WHERE id=?").run(row.id);continue;}
     const includeAddress=sensitive&&!!config.encryptionKey&&!!origin;
     const name=store.get('settings').serverName;
-    const message=renderNotification(store,row.type,data,{title:`【${name}】异常提醒`,body:sensitive?(includeAddress?'管理入口已更新，点击打开新入口。':'管理入口已更新，请通过SSH应急菜单查看当前地址。'):String(data.body||'请登录面板查看详情。'),group:name,sensitive:includeAddress,
+    const message=renderNotification(store,row.type,data,{title:`【${name}】${row.type==='update.status'?'更新状态提醒':'异常提醒'}`,body:sensitive?(includeAddress?'管理入口已更新，点击打开新入口。':'管理入口已更新，请通过SSH应急菜单查看当前地址。'):String(data.body||'请登录面板查看详情。'),group:name,sensitive:includeAddress,
       ...(includeAddress?{url:row.type==='entrance.rotated'?new URL('/'+data.entrance+'/',origin).href:new URL('/'+store.get('entrance').value+'/',data.origin).href}:{})});
     try {
       await sendBark(config,message,{fetchImpl});

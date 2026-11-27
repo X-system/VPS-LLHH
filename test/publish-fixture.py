@@ -17,7 +17,7 @@ class Opener:
             if mode=='existing':return Response({'draft':False})
             raise urllib.error.HTTPError(url,404,'missing',{},None)
         if url.endswith('/releases'):
-            body=json.loads(request.data);assert body['draft']is True
+            body=json.loads(request.data);assert body['draft']is True;assert '修复' in body['body'];assert ('llhh:update-policy' in body['body'])==(mode=='required')
             return Response({'id':7,'draft':True,'target_commitish':'a'*40,'assets':[]})
         if url.startswith('https://uploads.github.com/'):
             if mode=='failure':raise urllib.error.HTTPError(url,403,'denied',{},None)
@@ -28,8 +28,17 @@ class Opener:
 with tempfile.TemporaryDirectory()as temporary:
     root=pathlib.Path(temporary);(root/'dist').mkdir();(root/'package.json').write_text('{"version":"0.2.0"}');(root/'bootstrap.sh').write_text("#!/bin/bash\nREPOSITORY=''\nVERSION=''\n")
     (root/'dist/vps-panel-v0.2.0.tar.gz').write_bytes(b'fixture-package');(root/'dist/vps-panel-v0.2.0.tar.gz.sha256').write_text('fixture-checksum')
+    (root/'docs/releases').mkdir(parents=True)
+    if mode!='missing':(root/'docs/releases/0.2.0.md').write_text('# 0.2.0\n'+('新增线路管理，修复移动端布局与更新提醒。'*10),encoding='utf-8')
+    if mode=='required':
+        (root/'config').mkdir();(root/'config/update-policy.json').write_text('{"required":true}')
     with patch.object(publisher,'ROOT',root),patch.dict(os.environ,{'GITHUB_REPOSITORY':'fixture/VPS-LLHH','GITHUB_SHA':'a'*40,'GH_RELEASE_TOKEN':'fixture-token'}),patch.object(publisher.urllib.request,'build_opener',return_value=Opener()):
-        if mode=='failure':
+        if mode=='missing':
+            try:publisher.main()
+            except RuntimeError as error:assert '更新说明' in str(error)
+            else:raise AssertionError('Missing notes allowed')
+            assert requests==[]
+        elif mode=='failure':
             try:publisher.main()
             except RuntimeError as error:assert 'fixture-token'not in str(error)
             else:raise AssertionError('Failed upload was published')

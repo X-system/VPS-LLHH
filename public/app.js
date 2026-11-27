@@ -1,4 +1,4 @@
-import{updateControls as renderUpdateControls,updateReminder,showUpdating}from'./ui-updates.mjs';
+import{updateControls as renderUpdateControls,updateReminder,showUpdating,checkUpdateGate,showUpdatePrompt,installUpdateChecks}from'./ui-updates.mjs';
 import{serviceSettings}from'./ui-service-settings.mjs';
 import{renderOnboarding}from'./ui-onboarding.mjs';
 import{installPairingNotifications}from'./ui-pairing.mjs';
@@ -21,12 +21,13 @@ const escape = value => String(value ?? '').replace(/[&<>"']/g,char=>({'&':'&amp
 const bytes = value => value >= 1073741824 ? `${(value/1073741824).toFixed(2)} GB` : value >=1048576 ? `${(value/1048576).toFixed(1)} MB` : value>=1024?`${(value/1024).toFixed(1)} KB`:`${Math.round(value||0)} B`;
 const when = value => value ? new Date(value).toLocaleString('zh-CN') : '暂无记录';
 const role = () => state.meta?.role === 'exit' ? '出口机' : '中转机';
-function toast(message,owner,kind='success') { if(!root.dataset.updating)actionFeedback(owner,message,{kind}); }
+function toast(message,owner,kind='success') { if(!root.dataset.updating&&!state.mandatoryUpdate)actionFeedback(owner,message,{kind}); }
 async function api(path, { method='GET',data } = {}) {
   const sentCsrf=state.csrf;
   const controller=new AbortController(),deadline=setTimeout(()=>controller.abort(),20000);
   let response;try{response=await fetch(`${base}api/${path}`,{ method,signal:controller.signal,credentials:'same-origin',headers:{ ...(data?{'Content-Type':'application/json'}:{}),...(state.csrf?{'X-CSRF-Token':state.csrf}:{}) },body:data?JSON.stringify(data):undefined });}catch(error){throw new Error(controller.signal.aborted?(method==='GET'?'获取数据超时，请稍后重试。':'请求超时，操作可能仍在后台执行；请先更新数据确认状态，避免重复提交。'):'面板暂时不可用，可能正在重启；请稍后重试。');}finally{clearTimeout(deadline);}
   const result=await response.json();
+  if(result.mandatoryUpdate){state.mandatoryUpdate=result.update;showUpdatePrompt(ctx,result.update);const error=new Error(result.error);error.mandatory=true;throw error;}
   if(result.updating){showUpdating(root);const error=new Error('升级中，请等待');error.updating=true;throw error;}
   if (!response.ok) {
     if(response.status===401&&path!=='login'&&state.csrf===sentCsrf){state.csrf=null;if(state.meta)login();}
@@ -37,7 +38,8 @@ async function api(path, { method='GET',data } = {}) {
 }
 function title() { document.title=`${state.meta.serverName} · ${state.meta.appearance?.panelTitle||'服务器管理'}`; }
 function login() {
- state.updateReminderChecked=false;
+ document.querySelectorAll('.update-dialog').forEach(node=>node.remove());state.mandatoryUpdate=null;state.updateNoticeKey=null;
+ state.updateReminderChecked=false;state.updateNoticeKey=null;
   root.innerHTML=`<div class="login-page"><section class="login-card">${state.meta.appearance?.hasLogo?`<img class="login-logo" src="${base}appearance/logo.png" alt="Logo">`:'<div class="brand-mark">▢</div>'}<h1>${escape(state.meta.appearance?.loginName||state.meta.serverName)}</h1><div class="subtitle">管理员登录 <span class="badge neutral">${role()}</span></div><form id="login-form"><div class="field"><label for="username">用户名</label><input id="username" name="username" autocomplete="username" required maxlength="80" placeholder="请输入用户名"></div><div class="field"><label for="password">密码</label><input id="password" name="password" type="password" autocomplete="current-password" required placeholder="请输入密码"></div><label class="check-row"><input name="remember" type="checkbox">保持登录</label><div class="login-error" role="alert" aria-live="polite" hidden></div><button class="primary" type="submit">登录</button></form><p class="login-footer">仅限授权管理员访问</p></section><div class="login-note">${state.meta.systemChangesEnabled?'独立服务器管理':'本机开发预览'}</div></div>`;
   root.querySelector('form').onsubmit=async event=>{
     event.preventDefault();const form=event.currentTarget;const button=form.querySelector('button');button.disabled=true;
@@ -209,7 +211,7 @@ async function serviceControls(page){
 }
 async function recoveryControls(page){
  let data;try{data=await api('services');}catch(error){if(error.status===501)return;throw error;}
- const section=document.createElement('article');section.className='card';section.dataset.module='recovery';section.innerHTML=`<div class="card-header"><h2>自启与自修复</h2>${badge(data.autoStart&&data.autoRepair?'已开启':'部分未开启',data.autoStart&&data.autoRepair?'good':'warn')}</div><form class="card-body" id="service-policy"><p class="muted">建议开启。手动停止、维护和急停始终优先。</p><label class="check-row"><input type="checkbox" name="autoStart" ${data.autoStart?'checked':''}>服务器重启后恢复已开启的服务</label><label class="check-row"><input type="checkbox" name="autoRepair" ${data.autoRepair?'checked':''}>服务异常退出后有限重试</label><div class="settings-actions"><button>保存恢复策略</button></div></form>`;page.append(section);
+ const section=document.createElement('article');section.className='card';section.dataset.module='recovery';section.innerHTML=`<div class="card-header"><h2>自启与自修复</h2>${badge(data.autoStart&&data.autoRepair?'已开启':'部分未开启',data.autoStart&&data.autoRepair?'good':'warn')}</div><form class="card-body" id="service-policy"><p class="muted">建议开启。手动停止、维护和急停始终优先。</p><label class="check-row"><input type="checkbox" name="autoStart" ${data.autoStart?'checked':''}>服务器重启后恢复已开启的服务</label><label class="check-row"><input type="checkbox" name="autoRepair" ${data.autoRepair?'checked':''}>服务异常退出后自动重试</label><div class="settings-actions"><button>保存设置</button></div></form>`;page.append(section);
  section.querySelector('form').onsubmit=async event=>{event.preventDefault();const form=event.currentTarget;try{await api('services',{method:'POST',data:{action:'policy',autoStart:form.elements.namedItem('autoStart').checked,autoRepair:form.elements.namedItem('autoRepair').checked}});toast('恢复策略已保存');}catch(error){toast(error.message,undefined,'error');}};
  const roleCard=document.createElement('article');roleCard.className='card';roleCard.dataset.module='role';roleCard.innerHTML=`<div class="card-header"><h2>服务器角色</h2>${badge(role(),'info')}</div><div class="card-body"><p>切换角色会停止线路，并保留原角色的用户、统计和配置。日常使用无需修改。</p><button id="switch-role" class="danger">切换为${state.meta.role==='relay'?'出口机':'中转机'}</button></div>`;page.append(roleCard);roleCard.querySelector('button').onclick=async event=>{const actionButton=event.currentTarget;if(!confirm('确认停止当前服务并切换角色？切换后保持急停，需检查配对后重新启动。'))return;actionButton.disabled=true;try{state.meta={...state.meta,...await api('role',{method:'POST',data:{role:state.meta.role==='relay'?'exit':'relay',confirmed:true}})};title();toast('角色已切换，所有线路保持停止');await render();}catch(error){toast(error.message,undefined,'error');actionButton.disabled=false;}};
 }
@@ -247,6 +249,7 @@ async function maintenance(page) {
 async function render(){
  if(!state.csrf)return login();if(state.meta.onboarding?.active)return renderOnboarding(root,ctx);if(!state.meta.setupComplete)return setup();
  if(state.meta.uiVersion>=2){if(['lines','certificates','events'].includes(state.page))state.page='services';if(state.page==='monitor')state.page='traffic';}
+ if(await checkUpdateGate(ctx))return;
  const renderId=++state.renderId;shell();state.refreshCertificate=null;state.refreshServices=null;
  const names={monitor:'历史监控',overview:'运行总览',users:state.meta.role==='exit'?'中转机管理':'用户管理',traffic:state.meta.role==='exit'?'线路流量':'流量与额度',lines:'线路管理',certificates:'域名与证书',settings:'面板设置',logs:'日志与诊断',events:'消息与告警',maintenance:'备份与维护',help:'使用指南',services:'服务配置'};
  root.querySelectorAll('[data-page]').forEach(b=>{b.classList.toggle('active',b.dataset.page===state.page);b.setAttribute('aria-current',b.dataset.page===state.page?'page':'false');});
@@ -283,7 +286,8 @@ installHelp(ctx);
 installMobile(ctx);
 installHealth(ctx);
 installPairingNotifications(ctx);
+installUpdateChecks(ctx);
 window.addEventListener('popstate',()=>{const page=location.hash.slice(1);if(allowedPages.has(page)&&page!==state.page){state.page=page;render().catch(error=>toast(error.message));}});
 try{state.meta=await api('meta');title();const initial=/^#setup=([A-Za-z0-9_-]{32,128})$/.exec(location.hash);if(initial){history.replaceState(null,'',location.pathname);const session=await api('bootstrap',{method:'POST',data:{token:initial[1]}});state.csrf=session.csrf;state.meta=session;}else try{const session=await api('session');state.csrf=session.csrf;state.meta=session;}catch(error){if(error.status!==401)throw error;}await render();}
-catch(error){if(!error.updating){root.innerHTML='<div class="connection-error" role="alert"><h2>暂时无法获取数据</h2><p>'+escape(error.message||'请检查网络或当前管理入口。')+'</p><button id="retry-connection" class="primary">重新连接</button><p>若安全入口已更新，请查看 Bark 通知或 SSH 应急菜单。</p></div>';root.querySelector('#retry-connection').onclick=()=>location.reload();}}
+catch(error){if(!error.updating&&!error.mandatory){root.innerHTML='<div class="connection-error" role="alert"><h2>暂时无法获取数据</h2><p>'+escape(error.message||'请检查网络或当前管理入口。')+'</p><button id="retry-connection" class="primary">重新连接</button><p>若安全入口已更新，请查看 Bark 通知或 SSH 应急菜单。</p></div>';root.querySelector('#retry-connection').onclick=()=>location.reload();}}
 setInterval(()=>{if(!state.csrf||!state.meta?.setupComplete||document.visibilityState!=='visible'||document.querySelector('dialog[open]'))return;if(['overview','users','traffic','lines','services','monitor'].includes(state.page))refreshCurrent();},5000);

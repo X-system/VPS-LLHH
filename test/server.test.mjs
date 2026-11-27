@@ -211,3 +211,11 @@ test('TCP加速管理需要登录与CSRF，三选一校验，不接收任意命�
 });
 
 test('立即更换入口需登录与确认，生成随机新入口并注销旧会话',async t=>{const f=await fixture(t);assert.equal((await f.request('api/entrance/rotate',{method:'POST',headers:{'Content-Type':'application/json'},body:'{"confirmed":true}'})).status,401);await f.login();const before=f.app.store.get('entrance').value;assert.equal((await f.auth('api/entrance/rotate',{method:'POST',data:{confirmed:false}})).status,409);assert.equal(f.app.store.get('entrance').value,before);const response=await f.auth('api/entrance/rotate',{method:'POST',data:{confirmed:true}});assert.equal(response.status,200);const result=await response.json(),after=f.app.store.get('entrance').value;assert.notEqual(after,before);assert.equal(after.length,20);assert.ok(result.url.endsWith('/'+after+'/'));assert.equal(f.app.store.db.prepare('SELECT COUNT(*)AS n FROM sessions').get().n,0);assert.equal((await f.request('api/meta')).status,404);});
+
+
+test('紧急更新由后端锁定，重登录和管理器断线不能绕过；更新入口和日志仍可用',async t=>{
+ let offline=false,view={required:true,hasUpdate:true,available:{version:'9.0.0',requiredVersion:'9.0.0',notes:'紧急修复说明'}};
+ const f=await fixture(t,{systemRequest:async(action)=>{if(offline)throw Error('offline');if(action==='update-status')return view;if(action==='update-check')return view;if(action==='update-logs')return{history:[]};throw Error('must not mutate');}});await f.login();
+ assert.equal((await f.auth('api/users')).status,423);assert.equal((await f.auth('api/settings',{method:'POST',data:{serverName:'bypass'}})).status,423);assert.equal((await f.auth('api/updates')).status,200);assert.equal((await f.auth('api/updates/logs')).status,200);assert.equal((await f.auth('api/updates',{method:'POST',data:{action:'cancel'}})).status,423);
+ await f.login();assert.equal((await f.auth('api/users')).status,423);offline=true;await new Promise(r=>setTimeout(r,550));assert.equal((await f.auth('api/users')).status,423);assert.equal((await(await f.auth('api/updates')).json()).required,true);offline=false;view={required:false,hasUpdate:false};await new Promise(r=>setTimeout(r,550));assert.equal((await f.auth('api/users')).status,200);
+});

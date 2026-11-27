@@ -87,6 +87,6 @@ export function liveUsers(store,rows){
   if(active.length){const encoded=credentials.get(user.id)?.credentials;if(encoded){const secret=JSON.parse(store.unseal(encoded));synchronized=active.every(stream=>applied[stream]?.epoch===statuses.profiles[stream].epoch&&applied[stream].users?.[user.id]===createHash('sha256').update(secret[stream.split('.')[0]]).digest('hex'));}}
   const deployment=fresh?(active.length?(synchronized?'已部署':'等待权限同步'):'已停止'):'未部署';
   const accountStatus=!user.enabled?'已停用':user.expires!==null&&user.expires<=now?'已过期':user.quota!==null&&user.up+user.down>=user.quota?'额度已用尽':deployment;
-  return{...user,deployment,accountStatus,online:known.length?known.some(item=>item.connections>0):null,speedUp:values.some(item=>item.up!==null)?values.reduce((sum,item)=>sum+(item.up||0),0):null,speedDown:values.some(item=>item.down!==null)?values.reduce((sum,item)=>sum+(item.down||0),0):null};
+  return{...user,deployment,accountStatus,online:known.length?known.some(item=>item.connections>0):fresh&&!active.length?false:null,speedUp:values.some(item=>item.up!==null)?values.reduce((sum,item)=>sum+(item.up||0),0):null,speedDown:values.some(item=>item.down!==null)?values.reduce((sum,item)=>sum+(item.down||0),0):null};
  });
 }

@@ -20,7 +20,7 @@ export function createPanelNetwork({directory='/etc/vps-panel',getState,saveStat
   const reserved=[18444,19001,19002,19003,19004,...Object.values(state.relay?.ports||{}).flatMap(group=>Object.values(group)),state.network?.listenPort].filter(Boolean);
   if(reserved.includes(input.port))throw new Error('管理端口不能占用协议、隧道、认证或统计端口');
   const cert=await certificates.status();
-  const ipAccess=input.ipAccess??(input.useDomainCertificate===false?true:env.VPS_ALLOW_IP_ACCESS!=='0'),useDomainCertificate=input.useDomainCertificate??(!ipAccess||!!state.panelUseAcme);
+  const ipAccess=input.ipAccess??(input.useDomainCertificate===false?true:env.VPS_ALLOW_IP_ACCESS!=='0'),validDomain=cert.certificateStaging===false&&!!cert.certificateDomain&&cert.notAfter>Date.now(),useDomainCertificate=input.useDomainCertificate??(!ipAccess||validDomain);
   if(cert.job)throw new Error('请等待证书任务完成后再修改管理连接');
   if(useDomainCertificate&&(cert.certificateStaging!==false||!cert.certificateDomain||!cert.notAfter||cert.notAfter<=Date.now()))throw new Error('请先签发有效的正式域名证书');
   if(!ipAccess){

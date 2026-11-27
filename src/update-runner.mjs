@@ -21,9 +21,10 @@ for(const root of[base,directory,data]){const stat=await lstat(root);if(!stat.is
 await mkdir(cache,{recursive:true,mode:0o700});
 const cacheStat=await lstat(cache);if(!cacheStat.isDirectory()||cacheStat.uid!==0||(cacheStat.mode&0o077)||await realpath(cache)!==cache)throw new Error('更新缓存目录不安全');
 const previous=join(cache,'previous'),oldApp=join(base,'previous-app');
-let lastStep='starting',waitChild=null,intent=null,ownedStops=null;
+let lastStep='starting',waitChild=null,intent=null,ownedStops=null,runVersion=null;const runId=Date.now();
 async function recordUpdate(record){let history=[];try{history=JSON.parse(await readFile(join(directory,'update-history.json'),'utf8'));}catch{}history.push({at:Date.now(),...record});await atomicWrite(join(directory,'update-history.json'),JSON.stringify(history.slice(-200)));}
-async function setState(step,extra={}){lastStep=step;await atomicWrite(join(directory,'update-state.json'),JSON.stringify({step,at:Date.now(),...extra}));await recordUpdate({step,version:extra.version||null});}
+async function setState(step,extra={}){lastStep=step;await atomicWrite(join(directory,'update-state.json'),JSON.stringify({step,at:Date.now(),runId,version:runVersion,...extra}));await recordUpdate({step,version:extra.version||runVersion,runId});}
+async function notifyStarted(){try{await command('/usr/sbin/runuser',['-u','vps-panel','--',node,join(base,'app/src/update-notify.mjs'),'started',String(runId),runVersion||''],12000);}catch{}}
 async function stopWait(){if(!waitChild)return;const child=waitChild;waitChild=null;await new Promise(resolve=>{child.once('exit',resolve);child.kill('SIGTERM');setTimeout(()=>{child.kill('SIGKILL');resolve();},2000).unref();});}
 async function startWait(){if(waitChild)return;const child=fork(fileURLToPath(new URL('./update-wait.mjs',import.meta.url)),[],{stdio:['ignore','ignore','ignore','ipc']});waitChild=child;await new Promise((resolve,reject)=>{const timer=setTimeout(()=>reject(new Error('更新等待页启动超时')),10000);child.once('message',value=>{if(value.ready){clearTimeout(timer);resolve();}});child.once('exit',()=>{clearTimeout(timer);reject(new Error('更新等待页未能启动'));});});}
 function stopTickets(){return Object.fromEntries(['emergency','network','automation','vmess.att','vmess.direct','hy2.att','hy2.direct'].map(k=>[k,readFuse(directory,k)]));}
@@ -102,6 +103,7 @@ try{
   await readFile(join(previous,'panel.sqlite'));await lstat(oldApp);
  }else{
   const request=JSON.parse(await readFile(join(directory,'update-request.json'),'utf8'));
+  runVersion=request.version;
   const stage=join(cache,'stage-'+randomBytes(12).toString('hex'));await mkdir(stage,{mode:0o700});await setState('downloading',{version:request.version});
   await download(request,join(stage,'release.tar.gz'));
   await command('/usr/bin/python3',[join(base,'app/scripts/extract_release.py'),join(stage,'release.tar.gz'),join(stage,'app')]);
@@ -132,7 +134,7 @@ try{
   const safety=join(cache,'before-manual-rollback-'+randomBytes(8).toString('hex'));await snapshot(safety);
   const failed=join(base,'rolled-back-app-'+randomBytes(8).toString('hex'));await rename(join(base,'app'),failed);manualRecovery={app:failed,snapshot:safety};await rename(oldApp,join(base,'app'));await restoreSnapshot();swapped=false;
  }
- await startManagement();await setState('checking');await health();const resumed=await restoreIntent();await setState(mode==='--rollback'?'rolled-back':'complete',{maintenance:!resumed,servicesRestored:resumed});
+ if(mode==='--update')await notifyStarted();await startManagement();await setState('checking');await health();const resumed=await restoreIntent();await setState(mode==='--rollback'?'rolled-back':'complete',{maintenance:!resumed,servicesRestored:resumed});
  if(retained)for(const path of[retained.data,retained.app].filter(Boolean))await rm(path,{recursive:true,force:true}).catch(()=>{});
  console.log('维护完成，已按原先启停设置恢复；手动停止和急停优先。');
 }catch(error){

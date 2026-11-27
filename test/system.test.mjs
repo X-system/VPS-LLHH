@@ -119,6 +119,8 @@ test('核心运行不等于新用户权限已生效；凭证变更后重新显�
  assert.equal(liveUsers(store,[row])[0].deployment,'已部署');
  store.db.prepare('UPDATE users SET credentials=? WHERE id=?').run(store.seal(JSON.stringify(newCredentials())),id);
  assert.equal(liveUsers(store,[row])[0].deployment,'等待权限同步');
+ assert.equal(liveUsers(store,[row])[0].online,null,'运行中但采集缺失不能伪装离线');
+ store.set('service-status',{at:store.clock(),profiles:{'vmess.direct':{active:false}}});assert.equal(liveUsers(store,[{...row,last_online:store.clock()-60000}])[0].online,false,'全部获配线路停止后明确离线');
 });
 
 test('系统传输允许Hy2证书更新动作中的数字，非法格式不会到达执行器',async t=>{

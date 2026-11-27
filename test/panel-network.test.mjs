@@ -72,7 +72,7 @@ test('启用正式域名证书保留原IP入口，改端口同步两个地址，
  const f=await fixture(t);f.options.certificates.status=async()=>({certificateStaging:false,certificateDomain:'panel.example.test',notAfter:Date.now()+86400000,fingerprint:'test-only'});
  await mkdir(join(f.root,'certs/current'));for(const name of['fullchain.pem','privkey.pem'])await writeFile(join(f.root,'certs/current',name),'issued-fixture-'+name);
  const panel=createPanelNetwork({...f.options,schedule:async()=>{}});
- await panel.configure({port:18445,useDomainCertificate:true});
+ await panel.configure({port:18445,ipAccess:true});
  const current=await panel.status();assert.equal(current.origin,'https://panel.example.test:18445');
  assert.deepEqual(current.allowedOrigins,['https://panel.example.test:18445','https://192.0.2.1:18445']);
  await f.options.release();await panel.configure({port:18446,useDomainCertificate:false});

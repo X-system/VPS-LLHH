@@ -3,6 +3,13 @@ import hashlib,json,os,pathlib,re,sys,urllib.request,urllib.error,urllib.parse,s
 ROOT=pathlib.Path(__file__).resolve().parents[1]
 VERSION_PATTERN=r'v(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)(?:-test[1-9]\d*)?'
 MARKER='<!-- llhh:installer -->'
+
+def release_notes(root,version,required=True):
+    path=root/'docs/releases'/(version.removeprefix('v')+'.md')
+    text=path.read_text(encoding='utf-8').strip()if path.exists()else''
+    if required and(len(text)<80 or not re.search(r'新增|修复|改进|优化|调整|更新',text)):
+        raise RuntimeError('请先编写本版本更新说明：docs/releases/'+version.removeprefix('v')+'.md')
+    return text
 def installer(repository,version,source):
     if not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_.-]{0,99}/[A-Za-z0-9][A-Za-z0-9_.-]{0,99}',repository):raise ValueError('Invalid repository')
     if not re.fullmatch(VERSION_PATTERN,version):raise ValueError('Invalid version')
@@ -12,6 +19,7 @@ def installer(repository,version,source):
 def main():
     repository=os.environ.get('GITHUB_REPOSITORY','');revision=os.environ.get('GITHUB_SHA','')
     version='v'+json.loads((ROOT/'package.json').read_text(encoding='utf-8'))['version']
+    release_notes(ROOT,version)
     bootstrap=installer(repository,version,(ROOT/'bootstrap.sh').read_text(encoding='utf-8')).encode()
     if not re.fullmatch(r'[a-f0-9]{40}',revision):raise ValueError('Missing exact commit')
     token=os.environ.pop('GH_RELEASE_TOKEN','')
@@ -48,8 +56,13 @@ def main():
         test='-test'in tag
         if status==404:
             notes=root/'docs/releases'/(version[1:]+'.md')
+            release_notes(root,version,required=root==ROOT)
             body={'tag_name':tag,'target_commitish':commit,'name':'【'+('中转端'if role=='relay'else '出口端')+'】'+version[1:]+('（测试版）'if test else ''),'draft':True,'prerelease':test,'body':('测试版，尚非正式发布。'if test else '正式版本。')+' Debian 12 amd64。固定标签和程序包不覆盖。安装后按中文网页配置；代理默认停止。BBRX（如提供）为实验性功能，未验证提速收益。'}
             if notes.exists():body['body']=notes.read_text(encoding='utf-8')
+            policy_file=root/'config/update-policy.json'
+            if policy_file.exists():
+                policy=json.loads(policy_file.read_text(encoding='utf-8'))
+                if policy.get('required')is True and role in policy.get('roles',['relay','exit']):body['body']+='\n\n<!-- llhh:update-policy {"required":true} -->'
             _,release=request(api+'/releases','POST',json.dumps(body).encode())
         if not release['draft']:
             print(tag+' already published; immutable program release retained.');return

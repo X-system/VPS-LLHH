@@ -3,6 +3,7 @@ import{join}from'node:path';
 import{fileURLToPath}from'node:url';
 import{atomicWrite}from'./system-driver.mjs';
 import{parseVersion,compareVersions}from'./versions.mjs';
+import{releasePolicy}from'./update-policy.mjs';
 
 export function repositoryName(value){if(typeof value!=='string'||!/^[A-Za-z0-9][A-Za-z0-9_.-]{0,99}\/[A-Za-z0-9][A-Za-z0-9_.-]{0,99}$/.test(value)||value.split('/').some(part=>part==='..'||part.endsWith('.git')))throw new Error('仓库格式应为GitHub用户名/仓库名');return value;}
 export function releaseAsset(repository,release,{allowTest=false,role='relay'}={}){
@@ -13,7 +14,7 @@ export function releaseAsset(repository,release,{allowTest=false,role='relay'}={
  if(!asset||!Number.isInteger(asset.size)||asset.size<=0||asset.size>20*1024*1024||!/^sha256:[a-f0-9]{64}$/.test(asset.digest||''))throw new Error('发布包缺失、过大或没有GitHub SHA256校验');
  const expected=`https://github.com/${repository}/releases/download/${release.tag_name}/${name}`;
  if(asset.browser_download_url!==expected)throw new Error('发布包地址与配置仓库不一致');
- return{version,role,url:expected,sha256:asset.digest.slice(7),size:asset.size};
+ return{version,role,url:expected,sha256:asset.digest.slice(7),size:asset.size,...releasePolicy(release.body)};
 }
 export function newerVersion(candidate,current){return!!parseVersion(candidate)&&!!parseVersion(current)&&compareVersions(candidate,current)>0;}
 export const builtInRepository='X-system/VPS-LLHH';
@@ -36,6 +37,7 @@ export function createUpdateManager({directory='/etc/vps-panel',coreDirectory='/
      if(releases.length<100)break;
     }
     const available=found.sort((a,b)=>compareVersions(b.version,a.version))[0]||null;
+    const critical=found.find(asset=>asset.required&&newerVersion(asset.version,current));if(available&&critical){available.required=true;available.requiredVersion=critical.version;}
     await write('update-check.json',{checkedAt:clock(),role,available,error:null});return available;
    }catch(e){const previous=await read('update-check.json',{});await write('update-check.json',{...previous,attemptedAt:clock(),error:'检查更新失败，请检查网络后重试'});throw e;}
   })().finally(()=>{checking=null;});return checking;
@@ -43,15 +45,17 @@ export function createUpdateManager({directory='/etc/vps-panel',coreDirectory='/
  async function status({check:requested=false}={}){
   if(requested)await check();const current=await version(),role=await getRole(),cache=await read('update-check.json',{}),job=await read('update-state.json'),plan=await read('update-plan.json');
   const available=cache.role===role?cache.available:null;
-  return{currentVersion:current,job,available:available?{version:available.version}:null,hasUpdate:!!available&&newerVersion(available.version,current),checkedAt:cache.checkedAt||null,checkError:cache.error||null,plan:plan?{state:plan.state,at:plan.at,version:plan.version}:null,dailyCheckTime:'08:00',timeZone:'Asia/Shanghai'};
+  const hasUpdate=!!available&&newerVersion(available.version,current),required=hasUpdate&&available.required===true&&newerVersion(available.requiredVersion||available.version,current),history=await read('update-history.json',[]);
+  return{currentVersion:current,job,available:available?{version:available.version,notes:available.notes||'',required,requiredVersion:available.requiredVersion||available.version}:null,hasUpdate,required,checkedAt:cache.checkedAt||null,checkError:cache.error||null,plan:plan?{state:plan.state,at:plan.at,version:plan.version}:null,history:history.slice(-40).map(row=>({step:row.step,at:row.at,version:row.version,runId:row.runId})),dailyCheckTime:'08:00',timeZone:'Asia/Shanghai'};
  }
  async function queue(asset){
   if(queueing)throw new Error('正在提交更新任务，请稍候');queueing=true;
   try{
    if(asset.role!==await getRole()||!newerVersion(asset.version,await version()))throw new Error('预约版本与当前服务器不匹配，或已不是更新版本');
-   await write('update-request.json',{...asset,repository});await write('update-state.json',{step:'queued',version:asset.version,at:clock()});
+   const policy=await status();if(policy.required&&compareVersions(asset.version,policy.available.requiredVersion)<0)throw new Error('预约版本已过时，请立即安装紧急安全更新');
+   const queuedAt=clock();await write('update-request.json',{...asset,repository});await write('update-state.json',{step:'queued',version:asset.version,at:queuedAt});
    try{await schedule(join(coreDirectory,'app/src/update-runner.mjs'),'--update');}catch(e){await write('update-state.json',{step:'failed-to-start',at:clock()});throw e;}
-   return{accepted:true,version:asset.version};
+   return{accepted:true,version:asset.version,at:queuedAt};
   }finally{queueing=false;}
  }
  async function start(input){
@@ -68,6 +72,7 @@ export function createUpdateManager({directory='/etc/vps-panel',coreDirectory='/
     if(job?.at>=(plan.launchAt||plan.at)&&['complete','rolled-back','failed','failed-rolled-back','failed-needs-ssh','failed-to-start','failed-interrupted'].includes(job?.step)){plan={...plan,state:'finished',asset:undefined};await write('update-plan.json',plan);}
     else if(clock()-(plan.launchAt||plan.at)>60000&&!await isRunning()){plan={...plan,state:'scheduled'};await write('update-plan.json',plan);}
    }
+   const policy=await status();if(plan?.state==='scheduled'&&policy.required){plan={state:'cancelled',at:clock(),version:plan.version,reason:'required-update'};await write('update-plan.json',plan);}
    if(plan?.state==='scheduled'&&(plan.asset?.role!==await getRole()||!newerVersion(plan.version,await version()))){plan={state:'cancelled',at:clock(),version:plan.version};await write('update-plan.json',plan);}
    if(plan?.state==='scheduled'&&plan.at<=clock()&&(!plan.retryAt||plan.retryAt<=clock())){
     try{plan={...plan,state:'launching',launchAt:clock()};await write('update-plan.json',plan);await queue(plan.asset);await write('update-plan.json',{...plan,state:'launched'});}
@@ -82,12 +87,13 @@ export function createUpdateManager({directory='/etc/vps-panel',coreDirectory='/
  }
  return{status,tick,start,
   async reserve(input){
+   if((await status()).required)throw new Error('这是紧急安全更新，不能预约或跳过，请立即更新');
    if(input.confirmed!==true||!Number.isSafeInteger(input.at)||input.at<clock()+60000||input.at>clock()+30*86400000)throw new Error('请选择1分钟后、30天以内的预约时间，并确认更新');
-   const asset=await check();if(!asset||!newerVersion(asset.version,await version()))throw new Error('当前没有可预约的更新');
+   const asset=await check();if((await status()).required)throw new Error('这是紧急安全更新，请立即更新');if(!asset||!newerVersion(asset.version,await version()))throw new Error('当前没有可预约的更新');
    if(await isRunning())throw new Error('更新正在执行，不能重新预约');await write('update-plan.json',{state:'scheduled',at:input.at,version:asset.version,asset,confirmedAt:clock()});return{accepted:true,at:input.at,version:asset.version};
   },
-  async cancel(){const plan=await read('update-plan.json');if(plan&&!['scheduled','failed'].includes(plan.state))throw new Error('更新已经开始，不能取消');await write('update-plan.json',null);return{cancelled:true};},
+  async cancel(){if((await status()).required)throw new Error('紧急安全更新不能取消');const plan=await read('update-plan.json');if(plan&&!['scheduled','failed'].includes(plan.state))throw new Error('更新已经开始，不能取消');await write('update-plan.json',null);return{cancelled:true};},
   async diagnostics(){return{format:'vps-panel-update-diagnostics',at:clock(),status:await status(),history:await read('update-history.json',[])};},
-  async rollback(input){if(input.confirmed!==true)throw new Error('回滚会恢复升级前的配置与统计，请确认');await readFile('/var/cache/vps-panel-updates/previous/panel.sqlite');await schedule(join(coreDirectory,'app/src/update-runner.mjs'),'--rollback');return{accepted:true};}
+  async rollback(input){if((await status()).required)throw new Error('当前需要紧急安全更新，不能通过回退跳过');if(input.confirmed!==true)throw new Error('回滚会恢复升级前的配置与统计，请确认');await readFile('/var/cache/vps-panel-updates/previous/panel.sqlite');await schedule(join(coreDirectory,'app/src/update-runner.mjs'),'--rollback');return{accepted:true};}
  };
 }

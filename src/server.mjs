@@ -3,6 +3,8 @@ import{delegateNotification,notificationRelayStatus}from'./notification-relay.mj
 import{createNodeHealth,publicProbeIPv4}from'./node-health.mjs';
 import{networkInterfaces}from'node:os';
 import{isIP}from'node:net';
+import{compareVersions,parseVersion}from'./versions.mjs';
+import{observeUpdateNotices,emitUpdateNotice}from'./update-notices.mjs';
 import http from 'node:http';
 import https from 'node:https';
 import { readFileSync,writeFileSync,unlinkSync } from 'node:fs';
@@ -98,6 +100,10 @@ export async function createApp(options = {}) {
   }
   let updateStatusCache=null,updateStatusAt=0,updateStatusPending=null;
   async function updateView(){if(!systemRequest)return null;if(Date.now()-updateStatusAt<500)return updateStatusCache;if(updateStatusPending)return updateStatusPending;updateStatusPending=systemRequest('update-status').then(value=>{updateStatusCache=value;updateStatusAt=Date.now();return value;}).catch(()=>null).finally(()=>{updateStatusPending=null;});return updateStatusPending;}
+  function requiredUpdate(value){
+    if(value){observeUpdateNotices(store,value);if(value.required&&value.hasUpdate&&value.available)store.set('required-update',{currentVersion:appVersion,hasUpdate:true,required:true,available:{version:value.available.version,requiredVersion:value.available.requiredVersion||value.available.version,notes:value.available.notes||''}});else if(value.required===false||value.hasUpdate===false)store.set('required-update',null);}
+    const cached=store.get('required-update'),minimum=cached?.available?.requiredVersion;if(!parseVersion(minimum)||compareVersions(appVersion,minimum)>=0){if(cached)store.set('required-update',null);return null;}return cached;
+  }
   const handler = async (req, res) => {
     res.setHeader('Cache-Control','no-store');
     res.setHeader('X-Content-Type-Options','nosniff');
@@ -183,6 +189,8 @@ export async function createApp(options = {}) {
       if (!session) throw new HttpError(401,'请先登录');
       if (!['GET','HEAD'].includes(req.method) && req.headers['x-csrf-token'] !== session.csrf) throw new HttpError(403,'操作验证失败，请刷新后重试');
       if (req.method === 'GET' && suffix === 'api/session') return json(res,200,{ csrf:session.csrf,...metadata(),username:store.db.prepare('SELECT username FROM admin WHERE id=1').get().username });
+      const mandatory=requiredUpdate(await updateView());
+      if(mandatory&&!['api/updates','api/updates/logs','api/logout'].includes(suffix))return json(res,423,{error:'发现紧急安全更新，请先完成更新',mandatoryUpdate:true,update:mandatory});
       if(suffix==='api/onboarding'){
         if(req.method==='GET')return json(res,200,{...onboarding.view(),meta:metadata()});
         if(req.method==='POST'){
@@ -312,12 +320,14 @@ export async function createApp(options = {}) {
       if(req.method==='GET'&&suffix==='api/updates/logs'){if(!systemRequest)throw new HttpError(501,'未连接系统管理器');return json(res,200,await systemRequest('update-logs'));}
       if(suffix==='api/updates'){
         if(!systemRequest)throw new HttpError(501,'更新功能需要Linux系统管理器');
-        if(req.method==='GET')return json(res,200,await systemRequest('update-status'));
+        if(req.method==='GET'){let status;try{status=await systemRequest('update-status');}catch(error){if(mandatory)return json(res,200,mandatory);throw error;}const required=requiredUpdate(status);return json(res,200,required?{...status,...required}:status);}
         if(req.method==='PUT')throw new HttpError(405,'更新来源已内置，无需配置');
         if(req.method==='POST'){
           const data=await body(req);if(!['check','update','rollback','reserve','cancel'].includes(data.action))throw new HttpError(400,'更新操作错误');
+          if(mandatory&&!['check','update'].includes(data.action))return json(res,423,{error:'紧急安全更新不能跳过或预约',mandatoryUpdate:true,update:mandatory});
           const result=await systemRequest(data.action==='check'?'update-status':data.action==='update'?'update-start':data.action==='reserve'?'update-reserve':data.action==='cancel'?'update-cancel':'update-rollback',{check:true,confirmed:data.confirmed,at:data.at});
           updateStatusAt=0;if(data.action==='update')updateStatusCache={job:{step:'queued'}};
+          if(data.action==='check')requiredUpdate(result);else if(data.action==='update')emitUpdateNotice(store,'upcoming',result.at||Date.now(),{version:result.version||'',detail:'更新即将开始，线路会短暂暂停。'});else if(data.action==='reserve')emitUpdateNotice(store,'upcoming',data.at+':'+result.version,{version:result.version||'',at:data.at});
           store.audit('执行面板更新操作',{action:data.action});return json(res,data.action==='check'?200:202,result);
         }
       }
