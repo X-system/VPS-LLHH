@@ -18,26 +18,39 @@ if ! command -v curl >/dev/null || ! command -v python3 >/dev/null || [[ ! -s /e
  apt-get update -qq
  apt-get install -y --no-install-recommends ca-certificates curl python3
 fi
+if [[ -z $INSTALL_ROLE ]];then
+ echo '请选择安装面板：'
+ echo '  1. 中转端'
+ echo '  2. 出口端'
+ echo '  总控端：尚未开发，暂不可安装'
+ [[ -r /dev/tty ]] || { echo '无人值守安装请指定 --role relay 或 --role exit。';exit 1; }
+ while true;do
+  read -r ROLE_CHOICE </dev/tty
+  case "$ROLE_CHOICE" in 1)INSTALL_ROLE=relay;break;;2)INSTALL_ROLE=exit;break;;*)echo '请输入 1 或 2：';;esac
+ done
+fi
+[[ $INSTALL_ROLE == relay ]] && echo '当前选择：中转端' || echo '当前选择：出口端'
+echo '安装版本：'
 STAGE=$(mktemp -d /var/tmp/vps-panel-bootstrap.XXXXXXXX)
 cleanup(){ if [[ $STAGE == /var/tmp/vps-panel-bootstrap.* && -d $STAGE && ! -L $STAGE ]];then rm -rf -- "$STAGE";fi; }
 trap cleanup EXIT
-python3 - "$REPOSITORY" "$STAGE/versions.json" <<'CATALOG'
+python3 - "$REPOSITORY" "$STAGE/versions.json" "$INSTALL_ROLE" <<'CATALOG'
 import sys,json,re,urllib.request
-repo=sys.argv[1];found={}
+repo=sys.argv[1];role=sys.argv[3];found={}
 pattern=r'v(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-test([1-9]\d*))?'
 for page in range(1,11):
  req=urllib.request.Request('https://api.github.com/repos/'+repo+'/releases?per_page=100&page='+str(page),headers={'User-Agent':'VPS-LLHH-installer','Accept':'application/vnd.github+json'})
  with urllib.request.urlopen(req,timeout=30)as response:releases=json.load(response)
  if not isinstance(releases,list):raise RuntimeError('发布列表格式错误')
  for release in releases:
-  tag=release.get('tag_name','');match=re.fullmatch(pattern,tag)
+  tag=release.get('tag_name','');prefix=role+'-';version_tag=tag[len(prefix):]if tag.startswith(prefix)else '';match=re.fullmatch(pattern,version_tag)
   if not match or release.get('draft')or '<!-- llhh:installer -->'in(release.get('body')or ''):continue
   test=match[4]is not None
   if bool(release.get('prerelease'))!=test:continue
-  name='vps-panel-'+tag+'.tar.gz';url='https://github.com/'+repo+'/releases/download/'+tag+'/'+name
+  name='vps-panel-'+version_tag+'.tar.gz';url='https://github.com/'+repo+'/releases/download/'+tag+'/'+name
   asset=next((a for a in release.get('assets',[])if a.get('name')==name),None)
   if not asset or asset.get('browser_download_url')!=url or not re.fullmatch(r'sha256:[a-f0-9]{64}',asset.get('digest',''))or not 0<asset.get('size',0)<=20*1024*1024:continue
-  found[tag]={'tag':tag,'label':tag[1:]+('（测试版）'if test else ''),'sha256':asset['digest'][7:],'sort':tuple(map(int,match.group(1,2,3)))+(int(match[4])if test else 0,test is False)}
+  found[tag]={'tag':version_tag,'releaseTag':tag,'label':version_tag[1:]+('（测试版）'if test else ''),'sha256':asset['digest'][7:],'sort':tuple(map(int,match.group(1,2,3)))+(int(match[4])if test else 0,test is False)}
  if len(releases)<100:break
 if not found:raise RuntimeError('暂时没有可安装的发布版本，请稍后重试')
 # A stable release follows every test build of the same base version.
@@ -66,7 +79,7 @@ if path.exists():
  assert json.loads(path.read_text())['version']==sys.argv[1][1:],'已安装其他版本。安装器不会覆盖或降级现有面板，请使用面板更新；需要切换到旧版时先卸载并使用空白数据目录。'
 EXISTING
 ASSET="vps-panel-$VERSION.tar.gz"
-BASE="https://github.com/$REPOSITORY/releases/download/$VERSION"
+BASE="https://github.com/$REPOSITORY/releases/download/$INSTALL_ROLE-$VERSION"
 curl --proto '=https' --tlsv1.2 -fL --connect-timeout 15 --max-time 180 --max-filesize 20971520 "$BASE/$ASSET" -o "$STAGE/$ASSET"
 python3 - "$STAGE/$ASSET" "$EXPECTED" "$STAGE/source" "$VERSION" <<'PACKAGE'
 import sys,pathlib,hashlib,tarfile,json,sqlite3

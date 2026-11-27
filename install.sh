@@ -10,14 +10,17 @@ source /etc/os-release
 if [[ $ID != debian || ( $VERSION_ID != 12 && ! ( $VERSION_ID == 13 && ${VPS_INSTALL_TEST_DEBIAN13:-0} == 1 ) ) ]]; then echo '当前仅开放Debian 12安装；其他系统验收后开放。' >&2; exit 1; fi
 SOURCE=''
 RESTORE=0
+INSTALL_ROLE=relay
 while [[ $# -gt 0 ]]; do
- case "$1" in --source) SOURCE=${2:?缺少源码目录}; shift 2;; --restore) RESTORE=1;shift;;*) echo '使用：bash install.sh --source /绝对源码目录 [--restore]' >&2; exit 1;; esac
+ case "$1" in --role) INSTALL_ROLE=${2:?缺少安装角色};shift 2;; --source) SOURCE=${2:?缺少源码目录}; shift 2;; --restore) RESTORE=1;shift;;*) echo '使用：bash install.sh --source /绝对源码目录 [--restore]' >&2; exit 1;; esac
 done
 [[ -n $SOURCE && $SOURCE = /* && -f $SOURCE/src/server.mjs && -f $SOURCE/config/releases.json ]] || { echo '请提供完整源码的绝对路径。' >&2; exit 1; }
-python3 - "$SOURCE" <<'VERSION_GUARD'
+python3 - "$SOURCE" "$INSTALL_ROLE" <<'VERSION_GUARD'
 import sys,json,pathlib,sqlite3
 source=pathlib.Path(sys.argv[1]);installed=pathlib.Path('/usr/local/lib/vps-panel/app/package.json')
 if installed.exists():assert json.loads(installed.read_text())['version']==json.loads((source/'package.json').read_text())['version'],'已安装其他版本，请使用面板更新；安装器不会覆盖现有版本'
+system=pathlib.Path('/etc/vps-panel/system.json')
+if installed.exists()and sys.argv[2]and system.exists():assert json.loads(system.read_text())['role']==sys.argv[2],'已安装其他角色，请在面板内受控切换角色；安装器不会覆盖'
 database=pathlib.Path('/var/lib/vps-panel/panel.sqlite')
 if database.exists():
  connection=sqlite3.connect(database.as_uri()+'?mode=ro',uri=True)
@@ -183,7 +186,8 @@ import{writeFileSync}from'node:fs';
 import{serviceUnits}from'/usr/local/lib/vps-panel/app/src/service-units.mjs';
 for(const[name,contents]of Object.entries(serviceUnits()))writeFileSync('/etc/systemd/system/'+name,contents,{mode:0o644});
 JS
-INIT_ARGS=()
+[[ $INSTALL_ROLE == relay || $INSTALL_ROLE == exit ]] || { echo "角色错误";exit 1; }
+INIT_ARGS=(--role "$INSTALL_ROLE")
 [[ $RESTORE == 0 ]] || INIT_ARGS+=(--restore)
 INIT_RESULT=$(runuser -u vps-panel -- env VPS_DATA_DIR=/var/lib/vps-panel /usr/local/lib/vps-panel/runtime/bin/node /usr/local/lib/vps-panel/app/src/install-init.mjs "${INIT_ARGS[@]}")
 /usr/local/lib/vps-panel/runtime/bin/node --input-type=module - "$INIT_RESULT" "$PRESERVE_CERT" <<'JS'

@@ -3,6 +3,8 @@ import{resolve,join}from'node:path';
 import{openStore}from'./store.mjs';
 const directory=resolve(process.env.VPS_DATA_DIR||'/var/lib/vps-panel');
 const restore=process.argv.includes('--restore');
+const roleIndex=process.argv.indexOf('--role'),role=roleIndex<0?'relay':process.argv[roleIndex+1];
+if(!['relay','exit'].includes(role))throw new Error('安装角色错误');
 if(existsSync(join(directory,'panel.sqlite'))&&!restore)throw new Error('禁止覆盖已有数据');
 const store=await openStore({directory});
 if(restore){
@@ -10,6 +12,6 @@ if(restore){
  for(const key of['relay-config','relay-pending','network-config','auth-services','access-applied','service-status','live-traffic'])store.set(key,null);
  const encoded=store.get('role-archives');if(encoded){const archives=JSON.parse(store.unseal(encoded));for(const snapshot of Object.values(archives))snapshot.config={};store.set('role-archives',store.seal(JSON.stringify(archives)));}
  store.audit('恢复安装，保留账户及统计并要求重新确认配对');
-}else writeFileSync(join(directory,'.bootstrap.json'),JSON.stringify({username:'admin',password:store.bootstrapPassword}),{mode:0o600,flag:'wx'});
+}else{store.set('settings',{...store.get('settings'),role});writeFileSync(join(directory,'.bootstrap.json'),JSON.stringify({username:'admin',password:store.bootstrapPassword}),{mode:0o600,flag:'wx'});}
 console.log(JSON.stringify({role:store.get('settings').role,restored:restore}));
 store.close();
