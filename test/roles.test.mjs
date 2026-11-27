@@ -1,0 +1,44 @@
+import test from'node:test';
+import assert from'node:assert/strict';
+import{mkdtempSync,rmSync}from'node:fs';
+import{join}from'node:path';
+import{tmpdir}from'node:os';
+import{randomUUID}from'node:crypto';
+import{openStore}from'../src/store.mjs';
+import{newCredentials}from'../src/backup.mjs';
+import{switchRole}from'../src/roles.mjs';
+import{exportBackup,importBackup}from'../src/backup.mjs';
+
+test('同机角色切换保留各角色用户/凭证/累计，默认急停；系统操作失败不丢数据',async t=>{
+ const directory=mkdtempSync(join(tmpdir(),'vps-role-test-'));const store=await openStore({directory,password:'test-password'});
+ t.after(()=>{store.close();rmSync(directory,{recursive:true,force:true});});
+ const id=randomUUID(),credentials=store.seal(JSON.stringify(newCredentials()));
+ store.db.prepare('INSERT INTO users VALUES(?,?,?,?,?,?,?,?,?)').run(id,'原用户',1,'["hy2"]','["att"]',1000,null,credentials,store.clock());
+ store.applyTraffic({userId:id,stream:'hy2.att',epoch:'a',up:100,down:200});
+ const identity=store.get('identity'),entrance=store.get('entrance');let calls=0;
+ const request=async(action,data)=>{assert.equal(action,'switch-role');assert.equal(data.confirmed,true);calls++;return{role:data.role};};
+ await assert.rejects(switchRole(store,{role:'exit',confirmed:false},request));
+ await switchRole(store,{role:'exit',confirmed:true},request);
+ assert.equal(store.db.prepare('SELECT COUNT(*) AS n FROM users').get().n,0);assert.equal(store.get('runtime').emergencyStop,true);
+ assert.ok(!store.get('role-archives').includes('原用户'));
+ await switchRole(store,{role:'relay',confirmed:true},request);
+ assert.equal(store.db.prepare('SELECT credentials FROM users WHERE id=?').get(id).credentials,credentials);
+ assert.equal(store.db.prepare('SELECT up+down AS total FROM totals WHERE user_id=?').get(id).total,300);
+ assert.equal(store.get('identity'),identity);assert.deepEqual(store.get('entrance'),entrance);assert.equal(calls,2);
+ await assert.rejects(switchRole(store,{role:'exit',confirmed:true},async()=>{throw new Error('unavailable');}));
+ assert.equal(store.get('settings').role,'relay');assert.equal(store.db.prepare('SELECT COUNT(*) AS n FROM users').get().n,1);
+});
+test('出口机完整备份仍带上归档中转用户；另一台安装使用自己的主密钥恢复凭证和累计',async t=>{
+ const dirs=[mkdtempSync(join(tmpdir(),'vps-role-source-')),mkdtempSync(join(tmpdir(),'vps-role-target-'))];
+ const source=await openStore({directory:dirs[0],password:'test-source-password'}),target=await openStore({directory:dirs[1],password:'test-target-password'});
+ t.after(()=>{source.close();target.close();for(const dir of dirs)rmSync(dir,{recursive:true,force:true});});
+ const id=randomUUID(),credentials=newCredentials();source.db.prepare('INSERT INTO users VALUES(?,?,?,?,?,?,?,?,?)').run(id,'归档朋友',1,'["hy2"]','["att"]',1000,null,source.seal(JSON.stringify(credentials)),source.clock());
+ source.applyTraffic({userId:id,stream:'hy2.att',epoch:'a',up:100,down:200});
+ await switchRole(source,{role:'exit',confirmed:true},async()=>({}));
+ const backup=exportBackup(source,{full:true,password:'test-backup-password'});assert.ok(!JSON.stringify(backup).includes(credentials.hy2));
+ importBackup(target,backup,{password:'test-backup-password',mode:'move',confirmed:true});
+ await switchRole(target,{role:'relay',confirmed:true},async()=>({}));
+ const user=target.db.prepare('SELECT credentials FROM users WHERE id=?').get(id);assert.deepEqual(JSON.parse(target.unseal(user.credentials)),credentials);
+ assert.equal(target.db.prepare('SELECT up+down AS used FROM totals').get().used,300);
+ assert.equal(target.get('relay-config'),null);assert.equal(target.get('network-config'),null);
+});

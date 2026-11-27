@@ -1,0 +1,23 @@
+import test from'node:test';
+import assert from'node:assert/strict';
+import{mkdtempSync,rmSync,mkdirSync}from'node:fs';
+import{tmpdir}from'node:os';
+import{join}from'node:path';
+import{chromium}from'playwright';
+import{createApp}from'../src/server.mjs';
+import{captureHistory}from'../src/history.mjs';
+for(const role of ['relay','exit'])test('手机触屏：'+role+' 抽屉、卡片、历史曲线和小屏表单',async t=>{
+ const directory=mkdtempSync(join(tmpdir(),'vps-panel-mobile-')),app=await createApp({directory,password:'mobile-browser-test-password'});let browser;t.after(async()=>{await browser?.close();await app.close();rmSync(directory,{recursive:true,force:true});});
+ app.store.set('settings',{...app.store.get('settings'),role,serverName:'手机操作验收名称比较长'});app.store.set('onboarded',true);
+ const now=Date.now();for(let i=30;i>=0;i--){app.store.set('host-telemetry',{at:now-i*5000,cpuPercent:i,memoryPercent:40,diskPercent:22,physical:{up:1024*(i+1),down:2048*(i+1)},wireguard:{up:300,down:400}});captureHistory(app.store);}
+ await new Promise(r=>app.server.listen(0,'127.0.0.1',r));browser=await chromium.launch({args:process.platform==='win32'?['--disable-gpu','--disable-gpu-compositing']:[],headless:true,executablePath:process.env.PLAYWRIGHT_EXECUTABLE_PATH||(process.platform==='win32'?'C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe':undefined)});const context=await browser.newContext({viewport:{width:390,height:844},isMobile:true,hasTouch:true}),page=await context.newPage(),errors=[];page.on('pageerror',e=>errors.push(e.message));
+ await page.goto(`http://127.0.0.1:${app.server.address().port}/${app.store.get('entrance').value}/`);await page.locator('#username').fill('admin');await page.locator('#password').fill('mobile-browser-test-password');await page.getByRole('button',{name:'登录',exact:true}).tap();await page.locator('#mobile-menu').waitFor();await page.locator('[data-history-chart=network]').waitFor();
+ for(const width of [320,360,390,430,844]){await page.setViewportSize({width,height:width===844?390:844});await page.waitForTimeout(80);assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1),'总览宽度 '+width);await page.locator('#mobile-menu').tap();assert.equal(await page.locator('.shell').evaluate(e=>e.inert),true);await page.locator('.mobile-menu-close').tap();assert.equal(await page.locator('.shell').evaluate(e=>e.inert),false);}
+ await page.setViewportSize({width:390,height:844});await page.locator('#mobile-menu').tap();await page.locator('.sidebar [data-page=monitor]').tap();await page.locator('.monitor-card').first().waitFor();assert.equal(await page.locator('.monitor-card').count(),role==='exit'?3:4);for(const range of ['1h','24h','5m']){await page.locator(`[data-history-range="${range}"]`).tap();await page.waitForFunction(range=>document.querySelector(`[data-history-range="${range}"]`)?.getAttribute('aria-pressed')==='true',range);}
+ const plot=page.locator('[data-history-chart=network]');await plot.tap({position:{x:250,y:100}});await plot.locator('[data-history-tooltip]:not([hidden])').waitFor();await page.evaluate(()=>window.oldMonitor=document.querySelector('.monitor-widget'));await page.waitForResponse(r=>r.url().includes('/api/history?')&&r.request().method()==='GET',{timeout:10000});assert.ok(await page.evaluate(()=>window.oldMonitor===document.querySelector('.monitor-widget')));
+ mkdirSync('test-results',{recursive:true});await page.screenshot({path:`test-results/mobile-${role}-monitor.png`,fullPage:true});
+ if(role==='relay'){
+ await page.locator('.mobile-bottom-nav [data-page=users]').tap();await page.locator('#add-user').tap();await page.locator('dialog input[name=name]').fill('手机用户名字很长用于检查自动换行');await page.locator('dialog').getByRole('button',{name:'保存',exact:true}).tap();await page.locator('.users-table tbody tr').waitFor();await page.locator('table[data-mobile-table]').waitFor();assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1));await page.locator('[data-select-visible-button]').tap();assert.match(await page.locator('.selection-note').innerText(),/已选择 1/);await page.locator('[data-edit]').first().tap();await page.setViewportSize({width:390,height:430});await page.waitForFunction(()=>{const box=document.querySelector('dialog[open]').getBoundingClientRect();return box.y>=0&&box.bottom<=431;});await page.setViewportSize({width:390,height:844});await page.screenshot({path:'test-results/mobile-user-dialog.png',fullPage:true});await page.keyboard.press('Escape');await page.locator('.mobile-bottom-nav [data-page=users]').tap();await page.screenshot({path:'test-results/mobile-users.png',fullPage:true});
+ }
+ assert.deepEqual(errors,[]);
+});

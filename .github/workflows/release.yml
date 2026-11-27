@@ -1,0 +1,55 @@
+name: Build public installer
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+permissions:
+  contents: write
+concurrency:
+  group: public-release
+  cancel-in-progress: false
+jobs:
+  release:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Read the exact public commit
+        shell: bash
+        run: |
+          set -euo pipefail
+          git init .
+          git remote add origin "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY.git"
+          git fetch --depth=1 origin "$GITHUB_SHA"
+          git checkout --detach FETCH_HEAD
+      - name: Install the pinned Node runtime
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import hashlib,json,os,pathlib,subprocess,urllib.request
+          item=json.loads(pathlib.Path('config/releases.json').read_text())['node']
+          assert item['url'].startswith('https://nodejs.org/dist/')
+          target=pathlib.Path(os.environ['RUNNER_TEMP'])/'llhh-node';target.mkdir()
+          archive=target/'node.tar.xz'
+          with urllib.request.urlopen(item['url'],timeout=90)as source,archive.open('wb')as output:
+              while block:=source.read(1048576):output.write(block)
+          assert hashlib.sha256(archive.read_bytes()).hexdigest()==item['sha256']
+          subprocess.run(['tar','-xJf',str(archive),'--strip-components=1','-C',str(target)],check=True)
+          with open(os.environ['GITHUB_PATH'],'a')as output:output.write(str(target/'bin')+'\n')
+          PY
+      - name: Check source and backend regressions
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm ci --ignore-scripts --no-audit --no-fund
+          npm run check
+          python3 - <<'PY'
+          import pathlib,subprocess
+          tests=[str(p)for p in pathlib.Path('test').glob('*.test.mjs')if 'playwright'not in p.read_text()]
+          raise SystemExit(subprocess.call(['node','--test',*tests]))
+          PY
+      - name: Build source-only package
+        run: python3 scripts/build_release.py
+      - name: Publish versioned installer and package
+        env:
+          GH_RELEASE_TOKEN: ${{ github.token }}
+        run: python3 scripts/publish_release.py

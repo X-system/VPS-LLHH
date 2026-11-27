@@ -1,0 +1,25 @@
+import{esc,bytes,rate}from'./ui-kit.mjs';
+import{lastOnline}from'./presence.mjs';
+
+const clock=value=>{if(!value)return'';const date=new Date(value);return new Date(date.getTime()-date.getTimezoneOffset()*60000).toISOString().slice(0,16);};
+export async function openUserDetails(user,ctx){
+ const loaded=user?await ctx.api('users/'+user.id):{lines:(await ctx.api('line-catalog')).lines},current=loaded.user||user;
+ const ordered=['hy2.direct','vmess.direct','hy2.att','vmess.att'].map(id=>loaded.lines.find(line=>line.id===id)).filter(Boolean);
+ const initial=ordered.find(line=>line.state==='available')||ordered.find(line=>line.state==='unknown')||ordered.find(line=>line.reason!=='尚未开通')||ordered.find(line=>line.id==='hy2.direct');
+ const selected=new Set(current?.lines||(current?loaded.lines.filter(line=>current.protocols.includes(line.protocol)&&current.exits.includes(line.exit)).map(line=>line.id):initial?[initial.id]:[]));
+ const dialog=document.createElement('dialog');dialog.className='user-details-dialog';
+ dialog.innerHTML=`<div class="dialog-heading"><div><span class="eyebrow">用户管理</span><h2>${current?'编辑用户':'添加用户'}</h2></div><button type="button" class="icon-button" data-close aria-label="关闭用户详情">×</button></div>${current?`<div class="user-detail-metrics"><div><small>累计已用</small><strong>${bytes(current.up+current.down)}</strong></div><div><small>今日流量</small><strong>${bytes(loaded.usage.today.up+loaded.usage.today.down)}</strong></div><div><small>本月流量</small><strong>${bytes(loaded.usage.month.up+loaded.usage.month.down)}</strong></div></div><p class="user-detail-presence">${esc(lastOnline(current).label)} · ↑ ${rate(current.speedUp)} ↓ ${rate(current.speedDown)}</p><p class="muted">日、月用量从启用新统计后记录；未采集的历史不补算。</p>`:''}<form><div class="field"><label>用户名称</label><input name="name" required maxlength="48" value="${esc(current?.name||'')}" placeholder="用于你识别这个人，不影响节点名称"></div><fieldset class="user-line-picker"><legend>可以使用哪些线路</legend><p>逐条勾选；用户更新订阅后会看到所分配的线路。</p>${loaded.lines.map(line=>`<label class="user-line-choice"><input type="checkbox" name="line" value="${line.id}" ${selected.has(line.id)?'checked':''}><span><strong>${esc(line.name)}</strong><small>${esc(line.reason)}</small></span><span class="badge ${line.state==='available'?'good':line.state==='unavailable'?'neutral':'warn'}">${line.state==='available'?'可用':line.state==='unavailable'?'当前不可用':'状态待确认'}</span></label>`).join('')}</fieldset><div class="user-detail-fields"><div class="field"><label>流量上限（GB）</label><input name="quota" type="number" min="0" step="any" value="${current?.quota==null?'':current.quota/1073741824}" placeholder="留空表示不限额"><small>按上传与下载合计；0 表示没有可用流量。</small></div><div class="field"><label>到期时间</label><input name="expires" type="datetime-local" value="${clock(current?.expires)}"><small>留空表示长期有效，按你的本地时间填写。</small></div></div><label class="check-row"><input type="checkbox" name="enabled" ${current?.enabled!==false?'checked':''}>启用此用户</label><div class="user-detail-footer">${current?'<button type="button" class="danger" data-delete-user>删除用户</button>':'<span></span>'}<div class="actions"><button type="button" data-close>取消</button><button type="submit" class="primary">保存</button></div></div><p class="form-error" role="alert" hidden></p></form>`;
+ document.body.append(dialog);dialog.showModal();const close=()=>{dialog.close();dialog.remove();};
+ dialog.querySelectorAll('[data-close]').forEach(button=>button.onclick=close);dialog.oncancel=()=>dialog.remove();
+ const error=message=>{const node=dialog.querySelector('.form-error');node.hidden=false;node.textContent=message;ctx.toast(message);};
+ dialog.querySelector('form').onsubmit=async event=>{
+  event.preventDefault();const form=event.currentTarget,button=form.querySelector('[type=submit]'),lines=[...form.querySelectorAll('[name=line]:checked')].map(input=>input.value);
+  const protocols=[...new Set(lines.map(id=>id.split('.')[0]))],exits=[...new Set(lines.map(id=>id.split('.')[1]))];
+  const data={name:form.elements.name.value,enabled:form.elements.enabled.checked,lines,protocols:protocols.length?protocols:['hy2'],exits:exits.length?exits:['direct'],quota:form.elements.quota.value===''?null:Math.round(Number(form.elements.quota.value)*1073741824),expires:form.elements.expires.value?new Date(form.elements.expires.value).getTime():null};
+  button.disabled=true;try{await ctx.api(current?'users/'+current.id:'users',{method:current?'PATCH':'POST',data});close();ctx.toast('用户已保存，运行线路的权限正在同步');await ctx.navigate('users');}catch(e){error(e.message);button.disabled=false;}
+ };
+ const remove=dialog.querySelector('[data-delete-user]');if(remove)remove.onclick=async()=>{
+  if(!confirm('删除“'+current.name+'”？原订阅将失效，本月已用流量归入“已删除的用户”。'))return;
+  remove.disabled=true;try{await ctx.api('users/'+current.id,{method:'DELETE',data:{confirmed:true}});close();ctx.toast('用户已删除，原订阅失效，连接权限正在撤销');await ctx.navigate('users');}catch(e){error(e.message);remove.disabled=false;}
+ };
+}

@@ -1,0 +1,282 @@
+import{serviceSettings}from'./ui-service-settings.mjs';
+import{renderOnboarding}from'./ui-onboarding.mjs';
+import{installPairingNotifications}from'./ui-pairing.mjs';
+import{openUserDetails}from'./ui-user-details.mjs';
+import{installHealth,healthSettingsControls}from'./ui-health.mjs';
+import{installFeedback,showOverlay,hideOverlay}from'./ui-feedback.mjs';
+import{mountMonitor,refreshMonitor}from'./ui-monitor.mjs';
+import{icon,badge}from'./ui-kit.mjs';
+import{livePage,refreshLive}from'./ui-pages.mjs';
+import{installHelp,enhanceForms,helpPage,openGuide}from'./ui-help.mjs';
+import{organizeConfig}from'./ui-config.mjs';
+import{installMobile}from'./ui-mobile.mjs';
+import{lastOnline}from'./presence.mjs';
+const base = new URL('.', import.meta.url).pathname;
+const root = document.querySelector('#app');
+const allowedPages=new Set(['monitor','overview','users','traffic','lines','certificates','settings','logs','events','maintenance','help','services']);
+const state = {meta:null,csrf:null,page:allowedPages.has(location.hash.slice(1))?location.hash.slice(1):'overview',renderId:0,tabs:{}};
+const ctx={state,api,toast,userDialog,showLinks,navigate};
+const escape = value => String(value ?? '').replace(/[&<>"']/g,char=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[char]));
+const bytes = value => value >= 1073741824 ? `${(value/1073741824).toFixed(2)} GB` : value >=1048576 ? `${(value/1048576).toFixed(1)} MB` : value>=1024?`${(value/1024).toFixed(1)} KB`:`${Math.round(value||0)} B`;
+const when = value => value ? new Date(value).toLocaleString('zh-CN') : '暂无记录';
+const role = () => state.meta?.role === 'exit' ? '出口机' : '中转机';
+let toastTimer;const toastNode=document.querySelector('#toast');
+function toast(message) { const node=toastNode;node.textContent=message;node.style.display='block';showOverlay(node);clearTimeout(toastTimer);toastTimer=setTimeout(()=>{hideOverlay(node);node.style.display='none';},4200); }
+async function api(path, { method='GET',data } = {}) {
+  const sentCsrf=state.csrf;
+  const controller=new AbortController(),deadline=setTimeout(()=>controller.abort(),20000);
+  let response;try{response=await fetch(`${base}api/${path}`,{ method,signal:controller.signal,credentials:'same-origin',headers:{ ...(data?{'Content-Type':'application/json'}:{}),...(state.csrf?{'X-CSRF-Token':state.csrf}:{}) },body:data?JSON.stringify(data):undefined });}catch(error){throw new Error(controller.signal.aborted?(method==='GET'?'获取数据超时，请稍后重试。':'请求超时，操作可能仍在后台执行；请先更新数据确认状态，避免重复提交。'):'面板暂时不可用，可能正在重启；请稍后重试。');}finally{clearTimeout(deadline);}
+  const result=await response.json();
+  if (!response.ok) {
+    if(response.status===401&&path!=='login'&&state.csrf===sentCsrf){state.csrf=null;if(state.meta)login();}
+    if(response.status===404&&result.error==='Not found'){state.csrf=null;root.innerHTML='<div class="loading">安全入口已更新或不可用。请查看Bark通知，或通过SSH应急菜单查看当前入口。</div>';}
+    const error=new Error(result.error==='Not found'?'管理入口或请求已失效':result.error||'请求失败');error.status=response.status;throw error;
+  }
+  return result;
+}
+function title() { document.title=`${state.meta.serverName} · ${state.meta.appearance?.panelTitle||'服务器管理'}`; }
+function login() {
+  root.innerHTML=`<div class="login-page"><section class="login-card">${state.meta.appearance?.hasLogo?`<img class="login-logo" src="${base}appearance/logo.png" alt="Logo">`:'<div class="brand-mark">▢</div>'}<h1>${escape(state.meta.appearance?.loginName||state.meta.serverName)}</h1><div class="subtitle">管理员登录 <span class="badge neutral">${role()}</span></div><form id="login-form"><div class="field"><label for="username">用户名</label><input id="username" name="username" autocomplete="username" required maxlength="80" placeholder="请输入用户名"></div><div class="field"><label for="password">密码</label><input id="password" name="password" type="password" autocomplete="current-password" required maxlength="256" placeholder="请输入密码"></div><label class="check-row"><input name="remember" type="checkbox">保持登录</label><button class="primary" type="submit">登录</button></form><p class="login-footer">仅限授权管理员访问</p></section><div class="login-note">${state.meta.systemChangesEnabled?'独立服务器管理':'本机开发预览'}</div></div>`;
+  root.querySelector('form').onsubmit=async event=>{
+    event.preventDefault();const form=event.currentTarget;const button=form.querySelector('button');button.disabled=true;
+    try { const data=await api('login',{method:'POST',data:{username:form.elements.namedItem('username').value,password:form.elements.namedItem('password').value,remember:form.elements.namedItem('remember').checked}});form.elements.namedItem('password').value='';Object.assign(state,{csrf:data.csrf,meta:data});title();await render(); }
+    catch(error){toast(error.message);}finally{button.disabled=false;}
+  };
+}
+function navigate(page,filters){
+ if(!allowedPages.has(page))return;
+ ctx.closeMobileMenu?.({restoreFocus:false,restoreScroll:false});
+ state.page=page;state.userFilters=filters||{};
+ if(location.hash!=='#'+page)history.pushState(null,'','#'+page);
+ return render().then(()=>window.scrollTo(0,0)).catch(error=>toast(error.message));
+}
+function shell(){
+ const exit=state.meta.role==='exit',signature=JSON.stringify([state.meta.role,state.meta.serverName,state.meta.appearance,state.meta.uiVersion]);
+ if(root.querySelector('.sidebar')&&root.dataset.shellSignature===signature)return;
+ root.dataset.shellSignature=signature;
+ const legacyGroups=[['日常管理',[['overview','dashboard','运行总览'],['users','users',exit?'中转机管理':'用户管理'],['traffic','traffic',exit?'线路流量':'流量与额度'],['monitor','traffic','历史监控'],['lines','network','线路管理']]],['配置中心',[['certificates','shield','域名与证书'],['events','bell','消息与告警'],['settings','settings','面板设置']]],['工具与帮助',[['logs','logs','日志与诊断'],['maintenance','tools','备份与维护'],['help','help','使用指南']]]];
+ const groups=state.meta.uiVersion>=2?[['日常管理',[['overview','dashboard','首页'],...(!exit?[['users','users','用户管理']]:[]),['traffic','traffic','流量监控'],['services','network','服务配置'],['settings','settings','面板设置']]]]:legacyGroups;
+ root.innerHTML=`<aside class="sidebar"><div class="brand">${state.meta.appearance?.hasLogo?`<img class="sidebar-logo" src="${base}appearance/logo.png" alt="Logo">`:`<span class="brand-symbol">${icon('network')}</span>`}<span>${escape(state.meta.appearance?.panelTitle||'线路管理')}</span></div><div class="server-identity"><span class="server-avatar">${icon('server')}</span><div><strong>${escape(state.meta.serverName)}</strong><small>${role()} · 独立管理</small></div></div><nav class="nav">${groups.map(([name,menus])=>`<div class="nav-group"><span class="nav-group-title">${name}</span>${menus.map(([id,symbol,label])=>`<button data-page="${id}" class="${state.page===id?'active':''}"><span class="nav-icon">${icon(symbol)}</span>${label}</button>`).join('')}</div>`).join('')}</nav><div class="sidebar-bottom"><button type="button" class="health-trigger" data-node-health aria-expanded="false" aria-controls="node-health-details"><i class="health-dot breathing grey" aria-hidden="true"></i><span class="health-trigger-label">正在检查服务</span>${icon('arrow')}</button><span>v${escape(state.meta.version||'0.1.0')}</span></div></aside><div class="shell"><header class="topbar"><span class="breadcrumb">工作台 <b>/</b> <span id="breadcrumb-page">运行总览</span></span><div class="right"><button class="link-button" id="quick-help">${icon('help')} 上手指南</button><span class="admin-avatar">${icon('users')}</span><button class="link-button" id="logout">退出登录</button></div></header><div class="content"><div class="page-heading"><div><span class="eyebrow">${role()}工作台</span><h1>${escape(state.meta.serverName)}</h1><span class="muted" id="page-subtitle">运行总览</span></div><div class="actions"><span id="refresh-state" class="refresh-state"><i></i>数据已连接</span><button id="refresh">${icon('refresh')} 更新数据</button></div></div><section id="page"></section></div></div>`;
+ root.querySelectorAll('[data-page]').forEach(button=>button.onclick=()=>navigate(button.dataset.page));
+ root.querySelector('#logout').onclick=async()=>{try{await api('logout',{method:'POST'});state.csrf=null;login();}catch(error){toast(error.message);}};
+ root.querySelector('#quick-help').onclick=()=>openGuide('start',ctx);
+ root.querySelector('#refresh').onclick=()=>refreshCurrent(true).catch(error=>toast(error.message));
+}
+async function setup() {
+  root.innerHTML=`<section class="card setup"><h1>初始化服务器</h1><p>先给服务器起个名字，并选择它负责接入用户还是提供出口。保存后会给你下一步引导，线路保持关闭。</p><form><div class="field"><label>服务器名称</label><input name="serverName" required maxlength="48" placeholder="例如：洛杉矶中转一号" value="${escape(state.meta.serverName)}"></div><div class="field"><label>安装角色</label><div class="role-options"><label><input type="radio" name="role" value="relay" checked>中转机</label><label><input type="radio" name="role" value="exit">出口机</label></div></div><p>中转机管理用户和协议入口；出口机管理 WG 配对及出网。</p><button class="primary">保存初始设置</button></form></section>`;
+  root.querySelector('form').onsubmit=async event=>{event.preventDefault();const form=event.currentTarget;try{state.meta={...state.meta,...await api('setup',{method:'POST',data:{serverName:form.elements.namedItem('serverName').value,role:form.elements.namedItem('role').value}})};title();await render();}catch(error){toast(error.message);}};
+}
+async function overview(page){return livePage('overview',page,ctx);}
+async function users(page){return livePage('users',page,ctx,state.userFilters);}
+async function showLinks(id){
+ const result=await api('users/'+id+'/links'),dialog=document.createElement('dialog');dialog.className='links-dialog';
+ dialog.innerHTML=`<div class="dialog-heading"><div><span class="eyebrow">导入 v2rayN 或手机客户端</span><h2>客户端导入链接</h2></div><button class="icon-button" id="close-links" aria-label="关闭导入链接">×</button></div><p class="muted">推荐使用订阅地址，用户可用的协议和出口会一起导入。链接包含个人凭证，请勿公开分享。</p><div class="subscription-box"><label>订阅：${escape(result.subscriptionName||state.meta.serverName)}</label><textarea readonly rows="2">${escape(result.subscriptionUrl)}</textarea><button class="primary" data-copy="subscription">${icon('copy')} 复制订阅地址</button><button class="link-button" data-guide-open="users">怎么导入客户端？</button></div><details class="advanced-details"><summary>单条线路链接与二维码</summary>${result.links.map((link,index)=>`<div class="link-entry"><label>${link.protocol==='hy2'?'Hy2':'TCP'} · ${link.exit==='att'?'经 ATT 出口':'本机直出'}</label><textarea readonly rows="2">${escape(link.url)}</textarea><button data-copy="${index}">${icon('copy')} 复制此线路</button><img class="link-qr" loading="lazy" src="${escape(link.qr)}" alt="此线路的导入二维码"></div>`).join('')}</details>`;
+ document.body.append(dialog);dialog.showModal();dialog.querySelector('#close-links').onclick=()=>dialog.remove();dialog.addEventListener('cancel',()=>dialog.remove(),{once:true});
+ dialog.querySelectorAll('[data-copy]').forEach(button=>button.onclick=()=>copyText(button.dataset.copy==='subscription'?result.subscriptionUrl:result.links[Number(button.dataset.copy)].url));
+}
+async function copyText(value){
+ try{if(navigator.clipboard&&window.isSecureContext)await navigator.clipboard.writeText(value);else{const input=document.createElement('textarea');input.value=value;input.style.position='fixed';input.style.opacity='0';document.body.append(input);input.select();const ok=document.execCommand('copy');input.remove();if(!ok)throw new Error();}toast('已复制');}catch{toast('浏览器未允许复制，请选中链接手动复制');}
+}
+function userDialog(user) {return openUserDetails(user,ctx).catch(error=>toast(error.message));}
+
+async function settings(page) {
+  const config=await api('settings');
+  page.innerHTML=`<div class="settings-grid"><article class="card"><div class="card-header"><h2>基础设置</h2></div><form class="card-body" id="settings-form"><div class="field"><label>服务器名称</label><input name="serverName" maxlength="48" value="${escape(config.serverName)}" required><small>用于总览主标题、登录页、浏览器标签页和推送。</small></div><div class="field"><label>安全入口更新周期（天）</label><input name="rotationDays" type="number" min="1" max="180" value="${config.rotationDays}" required><small>强制启用，范围 1～180 天；不能关闭、自定义或设为永久。下次轮换：${when(config.nextRotation)}</small></div><div class="field"><label>线路标称带宽（Mbps）</label><input name="bandwidthMbps" type="number" min="1" max="1000000" value="${config.bandwidthMbps}" required><small>用于带宽告警阈值计算，不采用网卡标称速度。</small></div><div class="field"><label>操作日志保留天数</label><input name="logRetentionDays" type="number" min="1" max="365" value="${config.logRetentionDays}" required></div><div class="settings-actions"><button class="primary">保存设置</button></div></form></article><article class="card"><div class="card-header"><h2>管理员账户</h2></div><form class="card-body" id="account-form"><div class="field"><label>当前密码</label><input type="password" name="currentPassword" autocomplete="current-password" required></div><div class="field"><label>新用户名</label><input name="username" maxlength="48" autocomplete="username" value="${escape(state.meta.username||'')}" required></div><div class="field"><label>新密码</label><input type="password" name="password" minlength="12" maxlength="128" autocomplete="new-password" required><small>至少12位；修改后所有会话失效，需要重新登录。</small></div><div class="settings-actions"><button>更新管理员凭证</button></div></form></article></div>`;
+  page.querySelector('#settings-form').onsubmit=async event=>{event.preventDefault();const form=event.currentTarget;try{const data=await api('settings',{method:'PATCH',data:{serverName:form.elements.namedItem('serverName').value,rotationDays:Number(form.elements.namedItem('rotationDays').value),bandwidthMbps:Number(form.elements.namedItem('bandwidthMbps').value),logRetentionDays:Number(form.elements.namedItem('logRetentionDays').value)}});state.meta.serverName=data.serverName;title();toast('设置已保存');await render();}catch(error){toast(error.message);}};
+  page.querySelector('#account-form').onsubmit=async event=>{event.preventDefault();const form=event.currentTarget;try{await api('account',{method:'POST',data:{currentPassword:form.elements.namedItem('currentPassword').value,username:form.elements.namedItem('username').value,password:form.elements.namedItem('password').value}});form.reset();state.csrf=null;login();toast('凭证已更新，请重新登录');}catch(error){toast(error.message);}};
+}
+async function panelConnectionControls(page){
+ let value;try{value=await api('panel-network');}catch(error){if(error.status===501)return;throw error;}
+ const section=document.createElement('article');section.className='card';
+ section.innerHTML=`<div class="card-header"><h2>面板连接</h2></div><form class="card-body"><div class="field"><label>HTTPS管理端口</label><input name="port" type="number" min="1" max="65535" value="${value.port}" required><small>当前：${escape(value.origin)}。修改端口会改变订阅地址；已导入的代理线路不变。</small></div><label class="check-row"><input name="useDomainCertificate" type="checkbox" ${value.useDomainCertificate?'checked':''} ${value.availableDomain?'':'disabled'}>使用已签发的正式域名证书${value.availableDomain?'：'+escape(value.availableDomain):'（请先到域名与证书中申请）'}</label><p>变更后会重启网页；自检失败自动恢复旧连接。更换域名后需要重新登录，安全入口保持不变。</p><button>保存并检查新连接</button><div id="new-panel-link"></div></form>`;
+ page.append(section);
+ const addressNote=document.createElement('p');addressNote.textContent='启用域名证书后仍保留原IP访问地址和安全入口；直接通过IP访问可能提示证书与地址不匹配。'+((value.allowedOrigins||[]).filter(origin=>origin!==value.origin).length?' 保留的访问地址：'+value.allowedOrigins.filter(origin=>origin!==value.origin).join('、'):'');section.querySelector('form').append(addressNote);
+ section.querySelector('form').onsubmit=async event=>{event.preventDefault();if(!confirm('管理连接会短暂中断；端口改变后需要更新用户的订阅地址。确认继续？'))return;const form=event.currentTarget,button=form.querySelector('button');button.disabled=true;try{const result=await api('panel-network',{method:'PUT',data:{port:Number(form.elements.namedItem('port').value),useDomainCertificate:form.elements.namedItem('useDomainCertificate').checked}});section.querySelector('#new-panel-link').innerHTML=`<p>设置已提交，几秒后请打开新入口。若自检失败，旧连接会自动恢复。</p><a class="button" href="${escape(result.url)}" target="_blank" rel="noreferrer noopener">打开新入口</a>`;}catch(error){toast(error.message);button.disabled=false;}};
+}
+async function appearanceControls(page){
+ const value=await api('appearance'),section=document.createElement('article');section.className='card';
+ section.innerHTML=`<div class="card-header"><h2>登录页与外观</h2></div><form class="card-body"><div class="field"><label>网页标题</label><input name="panelTitle" maxlength="48" value="${escape(value.panelTitle)}" placeholder="留空使用服务器管理"></div><div class="field"><label>登录页名称</label><input name="loginName" maxlength="48" value="${escape(value.loginName)}" placeholder="留空使用服务器名称"></div><div class="field"><label>网页Logo</label><input type="file" accept="image/png" name="logo"><small>PNG，最大256 KB；当前${value.hasLogo?'已自定义':'使用默认图标'}。</small></div><label class="check-row"><input type="checkbox" name="removeLogo">恢复默认Logo</label><div class="field"><label>登录背景</label><input type="file" accept="image/png" name="background"><small>PNG，最大2 MB、4096×4096；当前${value.hasBackground?'已自定义':'使用默认背景'}。</small></div><label class="check-row"><input type="checkbox" name="removeBackground">恢复默认背景</label><div class="settings-actions"><button>保存外观</button></div></form>`;
+ page.append(section);section.querySelector('form').onsubmit=async event=>{
+  event.preventDefault();const form=event.currentTarget,data={loginName:form.elements.namedItem('loginName').value,panelTitle:form.elements.namedItem('panelTitle').value};
+  try{for(const kind of['logo','background']){const file=form.elements.namedItem(kind).files[0];if(form.elements.namedItem(kind==='logo'?'removeLogo':'removeBackground').checked)data[kind]=null;else if(file){if(file.size>(kind==='logo'?256*1024:2*1024*1024))throw new Error('图片超过大小限制');data[kind]=await new Promise((resolve,reject)=>{const reader=new FileReader();reader.onload=()=>resolve(reader.result);reader.onerror=reject;reader.readAsDataURL(file);});}}
+   state.meta.appearance=await api('appearance',{method:'PUT',data});title();const sheet=document.querySelector('link[href*="appearance.css"]');sheet.href=base+'appearance.css?updated='+Date.now();toast('外观已保存');await render();
+  }catch(error){toast(error.message||'图片读取失败');}
+ };
+}
+async function logs(page) {
+  const data=await api('audit');
+  page.innerHTML=`<article class="card"><div class="card-header"><h2>管理操作记录</h2><span class="status-note">最近100条</span></div>${data.entries.map(entry=>`<div class="audit-item"><time>${when(entry.at)}</time><span>${escape(entry.event)}</span></div>`).join('')||'<div class="empty">暂无记录</div>'}</article>`;
+  let diagnostic;try{diagnostic=await api('diagnostics');}catch(error){if(error.status===501)return;throw error;}
+  const card=document.createElement('article');card.className='card';card.innerHTML=`<div class="card-header"><h2>系统诊断与服务日志</h2><button id="export-diagnostics">导出脱敏诊断</button></div><div class="card-body"><p>导出包含服务状态、资源采样、最近操作和系统服务日志。</p><pre style="white-space:pre-wrap;overflow-wrap:anywhere">${escape(diagnostic.logs||'暂无服务日志')}</pre></div>`;page.prepend(card);
+  card.querySelector('#export-diagnostics').onclick=()=>{const url=URL.createObjectURL(new Blob([JSON.stringify(diagnostic,null,2)],{type:'application/json'}));const link=document.createElement('a');link.href=url;link.download='vps-panel-diagnostics.json';link.click();toast('文件已生成，请查看浏览器下载列表');setTimeout(()=>URL.revokeObjectURL(url),1000);};
+}
+async function lines(page){
+ const network=await api('network'),relay=await api('relay'),exit=state.meta.role==='exit';state.networkConfig=network;state.lineConfig=relay;
+ let info=null;try{info=await api('system/inspect');}catch(error){if(error.status!==501)throw error;}
+ page.innerHTML=`<div class="notice">先配置WG配对，再配置中转协议。保存配置会停止线路；完成证书和防火墙检查后，在系统维护中手动启动。所有配对只交换公钥。</div><article class="card"><div class="card-header"><h2>本机 WireGuard 身份</h2></div><div class="card-body"><div class="field"><label>本机公钥 · 发给另一端</label><input readonly value="${escape(network.publicKey)}"><small>公钥可以分享；私钥始终加密保存在本机，不在页面显示。</small></div></div></article><article class="card"><div class="card-header"><h2>${exit?'出口隧道与中转配对':'连接出口机'}</h2></div><form class="card-body" id="network-form"><div class="field"><label>物理网卡</label><input name="physicalInterface" value="${escape(network.physicalInterface||info?.physicalInterface||'eth0')}" required></div><div class="field"><label>本机隧道地址</label><input name="address" value="${escape(network.address||(exit?'10.76.0.1':'10.76.0.2'))}" required><small>使用10.76.0.1至254；同一出口下每台中转机的地址必须不同。</small></div><div class="field"><label>本机WG监听端口</label><input name="listenPort" type="number" min="1" max="65535" value="${network.listenPort||(exit?51874:51820)}" required></div><div id="peer-rows"></div>${exit?'<button type="button" id="add-peer">＋ 添加中转机</button>':''}<div class="settings-actions"><button class="primary" ${info?'':'disabled'}>保存配对并保持停止</button></div></form></article>${exit?'':`<article class="card"><div class="card-header"><h2>协议与域名</h2></div><form class="card-body" id="relay-form"><div class="field"><label>本机公网IPv4</label><input name="publicIPv4" value="${escape(relay.publicIPv4||(/^\d{1,3}(?:\.\d{1,3}){3}$/.test(location.hostname)&&!location.hostname.startsWith('127.')?location.hostname:''))}" required></div><div class="field"><label>代理域名</label><input name="domain" value="${escape(relay.domain||'')}" placeholder="例如 ps.example.com" required><small>域名A记录指向本机公网IP。Hy2需要DNS直连（灰云），并验证有效TLS证书。</small></div>${['vmess','hy2'].map(protocol=>['att','direct'].map(route=>`<div class="field"><label>${protocol==='hy2'?'Hy2 UDP':'原始 TCP'} · ${route==='att'?'ATT出口':'本机直出'} 端口</label><input type="number" min="1" max="65535" name="${protocol}-${route}" value="${relay.ports?.[protocol]?.[route]||({vmess:{att:18001,direct:18002},hy2:{att:443,direct:8443}})[protocol][route]}" required></div>`).join('')).join('')}<div class="settings-actions"><button class="primary" ${info?'':'disabled'}>保存线路并保持停止</button></div></form></article>`}`;
+ const rows=page.querySelector('#peer-rows');
+ function addPeer(peer={}){
+  if(!peer.address&&exit){const used=new Set([network.address||'10.76.0.1',...[...rows.querySelectorAll('[name=peer-address]')].map(input=>input.value)]);peer={...peer,address:Array.from({length:253},(_,index)=>'10.76.0.'+(index+2)).find(address=>!used.has(address))||''};}
+  const row=document.createElement('fieldset');row.className='card-body';
+  row.innerHTML=`<legend>${exit?'中转机':'出口机'}</legend><div class="field"><label>配对名称</label><input name="peer-name" maxlength="48" value="${escape(peer.name||'')}" placeholder="例如：洛杉矶中转一号"></div><div class="field"><label>对方公钥</label><input name="peer-key" value="${escape(peer.publicKey||'')}" required></div><div class="field"><label>对方隧道地址</label><input name="peer-address" value="${escape(peer.address||(exit?'10.76.0.2':'10.76.0.1'))}" required></div>${exit?'<button type="button" class="remove-peer">移除此配对</button>':`<div class="field"><label>出口公网IPv4</label><input name="peer-ip" value="${escape(peer.endpointIPv4||'')}" required></div><div class="field"><label>出口WG端口</label><input name="peer-port" type="number" min="1" max="65535" value="${peer.endpointPort||51874}" required></div>`}`;
+  row.querySelector('.remove-peer')?.addEventListener('click',()=>row.remove());rows.append(row);
+ }
+ (network.peers?.length?network.peers:[{}]).forEach(addPeer);page.querySelector('#add-peer')?.addEventListener('click',()=>addPeer());
+ page.querySelector('#network-form').onsubmit=async event=>{
+  event.preventDefault();const form=event.currentTarget;
+  const peers=[...rows.querySelectorAll('fieldset')].map(row=>({name:row.querySelector('[name=peer-name]').value,publicKey:row.querySelector('[name=peer-key]').value,address:row.querySelector('[name=peer-address]').value,...(exit?{}:{endpointIPv4:row.querySelector('[name=peer-ip]').value,endpointPort:Number(row.querySelector('[name=peer-port]').value)})}));
+  try{const saved=await api('network',{method:'PUT',data:{physicalInterface:form.elements.namedItem('physicalInterface').value,address:form.elements.namedItem('address').value,listenPort:Number(form.elements.namedItem('listenPort').value),peers}});toast(saved.relayNeedsConfirmation?'配对已更新，请确认并重新保存下方协议配置；线路保持停止':'WG配置已保存，线路保持停止');await render();}catch(error){toast(error.message);}
+ };
+ page.querySelector('#relay-form')?.addEventListener('submit',async event=>{
+  event.preventDefault();const form=event.currentTarget;const ports={};for(const protocol of['vmess','hy2']){ports[protocol]={};for(const route of['att','direct'])ports[protocol][route]=Number(form.elements.namedItem(protocol+'-'+route).value);}
+  try{await api('relay',{method:'PUT',data:{publicIPv4:form.elements.namedItem('publicIPv4').value,domain:form.elements.namedItem('domain').value,ports}});toast('协议配置已保存，尚未启动');await render();}catch(error){toast(error.message);}
+ });
+}
+async function updateControls(page){
+ let status;try{status=await api('updates');}catch(error){if(error.status===501)return;throw error;}
+ const section=document.createElement('article');section.className='card';
+ section.innerHTML=`<div class="card-header"><h2>版本更新与回滚</h2><span class="badge neutral">当前 ${escape(status.currentVersion)}</span></div><div class="card-body"><p>更新会先校验正式发布包、备份数据库，再停止线路。自检失败会尝试回滚；完成后仍保持急停。</p><form id="repository-form"><div class="field"><label>你的公开GitHub发布仓库</label><input name="repository" value="${escape(status.repository||'')}" placeholder="用户名/仓库名" required><small>仅从指定仓库的正式Release下载面板发布包，不执行任意网址的脚本。</small></div><button>保存发布仓库</button></form><p>最近维护状态：${escape(({'queued':'等待执行','downloading':'正在下载','prepared':'校验完成，准备更新','complete':'更新完成，保持急停','rolled-back':'已回滚，保持急停','failed':'维护失败，请查看日志','failed-rolled-back':'更新失败，已自动退回','rollback-failed-restored-current':'回滚目标异常，已恢复当前版本','failed-needs-ssh':'自动恢复未完成，请使用SSH应急菜单'})[status.job?.step]||(status.job?'状态待确认':'暂无'))}</p><div class="actions"><button id="check-updates" ${status.repository?'':'disabled'}>检查正式更新</button><button id="start-update" disabled>安装更新并保持停止</button><button id="rollback-version">回滚至升级前版本与数据</button></div><p id="update-result"></p></div>`;
+ page.append(section);section.querySelector('#repository-form').onsubmit=async event=>{event.preventDefault();try{await api('updates',{method:'PUT',data:{repository:event.currentTarget.elements.namedItem('repository').value}});toast('发布仓库已验证并保存');await render();}catch(error){toast(error.message);}};
+ section.querySelector('#check-updates').onclick=async event=>{const actionButton=event.currentTarget;actionButton.disabled=true;try{const value=await api('updates',{method:'POST',data:{action:'check'}});section.querySelector('#update-result').textContent=value.available?(value.hasUpdate?'可更新至 '+value.available.version:'当前已是最新正式版本'):'未发现正式发布包';section.querySelector('#start-update').disabled=!value.hasUpdate;}catch(error){toast(error.message);}finally{actionButton.disabled=false;}};
+ for(const[id,action,message]of[['start-update','update','确认更新并停止全部线路？完成后保持急停。'],['rollback-version','rollback','回滚会恢复升级前的版本、账户与统计，升级后新增数据不在旧快照中。确认继续？']])section.querySelector('#'+id).onclick=async event=>{const actionButton=event.currentTarget;if(!confirm(message))return;actionButton.disabled=true;try{await api('updates',{method:'POST',data:{action,confirmed:true}});toast('维护任务已提交，面板可能暂时断开；稍后刷新查看结果');}catch(error){toast(error.message);actionButton.disabled=false;}};
+}
+async function maintenanceExtras(page){
+ const section=document.createElement('article');section.className='card';
+ section.innerHTML=`<div class="card-header"><h2>恢复与卸载</h2></div><div class="card-body"><p>如果刚刚导入了错误配置，可以回退最近一次导入。回退后保持急停，管理员和当前安全入口不变。</p><button id="rollback-import">回退最近一次导入</button>${state.meta.systemChangesEnabled?'<hr><p>卸载会停止全部代理、WG和面板。共享系统依赖与其他程序不受影响。</p><label class="check-row"><input type="checkbox" id="purge-data">同时清除账户、密钥、统计及证书（不可恢复）</label><button class="danger" id="uninstall-panel">卸载面板</button>':''}</div>`;
+ page.append(section);section.querySelector('#rollback-import').onclick=async()=>{if(!confirm('确认回退最近一次导入并停止当前服务？'))return;try{state.meta={...state.meta,...await api('backup/rollback',{method:'POST',data:{confirmed:true}})};title();toast('已回退，服务保持急停');await render();}catch(error){toast(error.message);}};
+ const uninstallButton=section.querySelector('#uninstall-panel');if(uninstallButton)uninstallButton.onclick=async event=>{const actionButton=event.currentTarget;const purgeData=section.querySelector('#purge-data').checked;if(!confirm(purgeData?'确认卸载并永久清除全部运行数据？':'确认卸载并保留加密运行数据？几秒后面板会断开。'))return;actionButton.disabled=true;try{await api('uninstall',{method:'POST',data:{confirmed:true,purgeData}});root.innerHTML='<div class="loading">卸载任务已提交，面板即将关闭。'+(purgeData?'账户和运行数据将清除。':'运行数据保留，恢复安装时沿用原管理员密码。')+'</div>';state.csrf=null;}catch(error){toast(error.message);actionButton.disabled=false;}};
+}
+async function alertControls(page){
+ const config=await api('alert-rules'),section=document.createElement('article');section.className='card';
+ const names={'host.cpu':'CPU占用','host.memory':'内存占用','host.disk':'磁盘占用','host.bandwidth.up':'上传带宽','host.bandwidth.down':'下载带宽'};
+ const labels={spikePercent:'用户短时高占用阈值（带宽百分比）',spikeSeconds:'用户短时高占用持续秒数',bandwidthPercent:'用户长期高占用阈值（带宽百分比）',bandwidthSeconds:'用户长期高占用持续秒数',cooldownSeconds:'用户通知冷却秒数'};
+ section.innerHTML=`<div class="card-header"><h2>告警阈值</h2></div><form class="card-body"><p>带宽百分比基于面板设置中的线路带宽，上下行分别计算；600秒为10分钟。事件是否推送由上方Bark事件选项控制。</p><div class="table-wrap"><table><thead><tr><th>规则</th><th>启用</th><th>阈值%</th><th>持续秒数</th><th>冷却秒数</th></tr></thead><tbody>${config.hostRules.map((rule,index)=>`<tr><td>${names[rule.id]}</td><td><input type="checkbox" name="enabled-${index}" ${rule.enabled!==false?'checked':''}></td><td><input type="number" name="threshold-${index}" min="1" max="100" value="${rule.threshold}" required></td><td><input type="number" name="window-${index}" min="10" max="3600" value="${rule.windowSeconds}" required></td><td><input type="number" name="cooldown-${index}" min="60" max="86400" value="${rule.cooldownSeconds}" required></td></tr>`).join('')}</tbody></table></div>${Object.entries(config.userRules).map(([key,value])=>`<div class="field"><label>${labels[key]}</label><input type="number" name="user-${key}" min="${key.endsWith('Percent')?1:key==='cooldownSeconds'?60:5}" max="${key.endsWith('Percent')?100:key==='cooldownSeconds'?86400:3600}" value="${value}" required></div>`).join('')}<button>保存告警规则</button></form>`;
+ page.append(section);section.querySelector('form').onsubmit=async event=>{event.preventDefault();const form=event.currentTarget;const hostRules=config.hostRules.map((rule,index)=>({...rule,enabled:form.elements.namedItem('enabled-'+index).checked,threshold:Number(form.elements.namedItem('threshold-'+index).value),windowSeconds:Number(form.elements.namedItem('window-'+index).value),cooldownSeconds:Number(form.elements.namedItem('cooldown-'+index).value)}));const userRules=Object.fromEntries(Object.keys(config.userRules).map(key=>[key,Number(form.elements.namedItem('user-'+key).value)]));try{await api('alert-rules',{method:'PUT',data:{hostRules,userRules}});toast('告警规则已保存');}catch(error){toast(error.message);}};
+}
+async function certificateControls(page){
+ if(state.meta.role==='relay'&&!state.lineConfig)state.lineConfig=await api('relay');
+ let config;try{config=await api('certificate');}catch(error){if(error.status===501)return;throw error;}
+ const section=document.createElement('article');section.className='card';
+ section.innerHTML=`<div class="card-header"><h2>域名证书与自动续签</h2><span class="badge neutral">${config.job?'正在签发':config.notAfter?'已有证书':'尚未签发'}</span></div><form class="card-body" id="certificate-form"><p>通过Cloudflare DNS验证，不需要占用80端口。仅创建和删除本次TXT记录，不更改你的A记录。</p><p>正式自动续签：${escape(config.autoRenewDomain||'尚未保存正式配置')}。测试签发保留原正式续签计划，不会替换正在使用的证书。</p><div class="field"><label>证书域名</label><input name="domain" value="${escape(config.domain||state.lineConfig?.domain||'')}" required placeholder="例如 ps.example.com，与线路域名相同"></div><div class="field"><label>Cloudflare 区域ID</label><input name="zoneId" value="${escape(config.zoneId||'')}" required maxlength="32"><small>在该域名的Cloudflare概述页找到区域ID；不是账户ID。</small></div><div class="field"><label>仅限该域名的DNS编辑API令牌</label><input name="token" type="password" autocomplete="new-password" placeholder="${config.configured?'留空保留已保存令牌':'请输入API令牌'}" ${config.configured?'':'required'}><small>令牌加密保存，不会在页面回显。不需要全局API密钥。</small></div><div class="field"><label>证书联系邮箱</label><input name="email" type="email" value="${escape(config.email||'')}" required></div><label class="check-row"><input type="checkbox" name="termsAccepted" ${config.configured?'checked':''} required>我同意Let's Encrypt的服务条款</label><p><a href="https://letsencrypt.org/repository/" target="_blank" rel="noreferrer">查看签发机构条款</a></p><label class="check-row"><input type="checkbox" name="staging" ${config.staging?'checked':''}>先使用测试签发环境（测试证书不会替换正式证书）</label><p>正式证书有效至：${when(config.notAfter)}；后台在临近到期时自动续签。${config.error?escape(config.error):''}</p><div class="settings-actions"><button>保存证书配置</button><button type="button" id="issue-certificate" ${config.configured&&!config.job?'':'disabled'}>立即签发／续签</button></div></form>`;
+ page.append(section);
+ section.querySelector('#certificate-form').onsubmit=async event=>{event.preventDefault();const form=event.currentTarget;try{await api('certificate',{method:'PUT',data:{domain:form.elements.namedItem('domain').value,zoneId:form.elements.namedItem('zoneId').value,token:form.elements.namedItem('token').value,email:form.elements.namedItem('email').value,termsAccepted:form.elements.namedItem('termsAccepted').checked,staging:form.elements.namedItem('staging').checked}});form.elements.namedItem('token').value='';toast('证书配置已保存');await render();}catch(error){toast(error.message);}};
+ const feedback=document.createElement('div');feedback.className='card-body';feedback.id='certificate-feedback';feedback.setAttribute('role','status');feedback.setAttribute('aria-live','polite');section.querySelector('.card-header').after(feedback);
+ function showCertificate(current){
+  config=current;const valid=current.certificateStaging===false&&current.notAfter>Date.now();const chip=section.querySelector('.badge');chip.textContent=current.job?'正在签发':current.ok===false?'最近签发失败':valid?'已有有效证书':current.testResult?'测试签发已通过':current.notAfter?'证书已过期':'尚未签发';chip.className='badge '+(current.job?'warn':current.ok===false||current.notAfter&&!valid?'bad':valid?'good':'warn');section.dataset.certificateValid=String(valid);
+  feedback.innerHTML=current.job?'<p>正在申请证书并验证域名，本页会自动更新结果，请勿重复提交。</p>':current.ok===false?`<p>最近一次签发失败：${escape(current.error||'请检查证书配置与诊断记录')}</p>`:current.lastTestAt&&current.testResult?`<p>测试签发成功 · ${escape(when(current.lastTestAt))}。域名验证流程已通过，测试证书不能用于正式连接。</p><p>下一步：取消下方“测试签发环境”，保存配置，再点击“立即签发／续签”申请正式证书。</p>`:valid?`<p>正式证书已就绪，有效至 ${escape(when(current.notAfter))}。</p>`:current.notAfter?'<p>证书已过期或不是可用的正式证书，请检查配置后重新申请。</p>':'<p>保存配置后，点击“立即签发／续签”开始申请。</p>';
+  section.querySelector('#issue-certificate').disabled=!current.configured||!!current.job;
+ }
+ let certificatePoll;
+ function pollCertificate(){
+  clearTimeout(certificatePoll);certificatePoll=setTimeout(async()=>{
+   if(!section.isConnected||!state.csrf)return;
+   try{const current=await api('certificate');if(!section.isConnected)return;showCertificate(current);if(current.job)pollCertificate();}
+   catch{if(section.isConnected&&state.csrf){feedback.textContent='暂时无法获取签发进度，正在重试；无需再次提交申请。';pollCertificate();}}
+  },3000);
+ }
+ showCertificate(config);if(config.job)pollCertificate();state.refreshCertificate=async()=>{if(section.isConnected)showCertificate(await api('certificate'));};
+ section.querySelector('#issue-certificate').onclick=async()=>{
+  const previous=config;showCertificate({...config,job:{running:true}});
+  try{await api('certificate',{method:'POST',data:{}});const current=await api('certificate');if(!section.isConnected)return;showCertificate(current);if(current.job)pollCertificate();}
+  catch(error){if(section.isConnected){showCertificate(previous);feedback.textContent='申请提交或状态确认失败：'+error.message+'。刷新后检查任务状态，再决定是否重试。';}toast(error.message);}
+ };
+}
+async function serviceControls(page){
+ let data;try{data=await api('services');}catch(error){if(error.status===501)return;throw error;}
+ const locked=!!data.runtime?.emergencyStop||!!data.emergencyStop,exit=state.meta.role==='exit',section=document.createElement('article');section.className='service-module';section.dataset.module='services';
+ section.innerHTML=`<div class="section-title"><h2>${exit?'隧道运行状态':'协议线路'}</h2><span>只启动你要使用的线路</span></div><div class="notice danger-notice" data-emergency-notice ${locked?'':'hidden'}>当前处于急停锁定，解除后仍需手动启动线路。 <button data-service="release-emergency">解除急停 · 保持停止</button></div><div class="service-grid">${exit?`<article class="card service-card"><div class="service-card-title">${icon('network')}<h3>出口 WG 隧道</h3>${badge(data.network?.up?'运行中':'已停止')}</div><p>为已配对的中转机提供加密出口。</p><div class="actions"><button data-service="network-up" ${locked||data.network?.up?'disabled':''}>应用并启动出口WG</button><button data-service="network-down" ${data.network?.up?'':'disabled'}>停止出口WG</button></div></article>`:Object.entries(data.profiles).map(([stream,status])=>{const hy2=stream.startsWith('hy2'),needsCert=hy2&&!(data.certificate?.certificateStaging===false&&data.certificate?.notAfter>Date.now()),ready=state.lineConfig?.configured&&!locked&&!needsCert;return `<article class="card service-card"><div class="service-card-title"><span class="protocol-tag ${hy2?'hy2':'tcp'}">${hy2?'Hy2':'TCP'}</span><h3>${stream.endsWith('.att')?'经 ATT 出口':'本机直出'}</h3>${badge(status.active?'运行中':status.state==='failed'?'运行失败':'已停止')}</div><p>${hy2?'域名证书校验 · UDP':'原始 VMess TCP · 备用协议'}${stream.endsWith('.att')?' · 断线不绕行':''}</p>${needsCert?'<p class="inline-warning">需先申请正式证书 <button class="link-button" data-go-cert>前往配置 →</button></p>':''}<div class="actions"><button class="${!status.active&&ready?'primary':''}" data-service="start" data-stream="${stream}" ${status.active||!ready?'disabled':''}>启动</button><button data-service="stop" data-stream="${stream}" ${status.active?'':'disabled'}>停止</button><button data-service="restart" data-stream="${stream}" ${status.active?'':'disabled'}>重启</button></div></article>`;}).join('')}</div><details class="advanced-details danger-zone"><summary>停止与急停操作</summary><p>手动停止和急停会保留，自动修复不会擅自开启线路。</p><div class="actions"><button data-service="stop-all">停止所有代理</button><button class="danger" data-service="emergency-stop">急停并锁定</button></div></details>`;
+ page.prepend(section);
+ section.querySelectorAll('[data-go-cert]').forEach(b=>b.onclick=()=>navigate('certificates'));
+ state.refreshServices=async()=>{
+  if(!section.isConnected)return;
+  const fresh=await api('services');if(!section.isConnected)return;const nowLocked=!!fresh.emergencyStop||!!fresh.runtime?.emergencyStop;section.querySelector('[data-emergency-notice]').hidden=!nowLocked;section.querySelector('[data-service=release-emergency]').disabled=!nowLocked;
+  for(const start of section.querySelectorAll('[data-service=start]')){
+   const stream=start.dataset.stream,profile=fresh.profiles[stream],card=start.closest('.service-card'),chip=card.querySelector('.status-badge');
+   const label=profile.active?'运行中':profile.state==='failed'?'运行失败':'已停止';chip.className='badge status-badge '+(profile.active?'good':profile.state==='failed'?'bad':'quiet');chip.innerHTML='<i aria-hidden="true"></i>'+label;
+   const certReady=!stream.startsWith('hy2')||fresh.certificate?.certificateStaging===false&&fresh.certificate?.notAfter>Date.now();
+   start.disabled=profile.active||!state.lineConfig?.configured||fresh.emergencyStop||fresh.runtime?.emergencyStop||!certReady;
+   card.querySelectorAll('[data-service=stop],[data-service=restart]').forEach(button=>button.disabled=!profile.active);
+  }
+  const up=section.querySelector('[data-service=network-up]');if(up){const running=!!fresh.network?.up,chip=up.closest('.service-card').querySelector('.status-badge');chip.className='badge status-badge '+(running?'good':'quiet');chip.innerHTML='<i aria-hidden="true"></i>'+(running?'运行中':'已停止');up.disabled=running||!!fresh.emergencyStop||!!fresh.runtime?.emergencyStop;section.querySelector('[data-service=network-down]').disabled=!running;}
+ };
+ section.querySelectorAll('[data-service]').forEach(button=>button.onclick=async()=>{const action=button.dataset.service;if(!confirm(action==='release-emergency'?'解除锁定后仍保持停止，确认继续？':'该操作可能中断对应线路，确认继续？'))return;button.disabled=true;try{await api('services',{method:'POST',data:{action,stream:button.dataset.stream,confirmed:true}});toast('系统操作已完成');await render();}catch(error){toast(error.message);button.disabled=false;}});
+}
+async function recoveryControls(page){
+ let data;try{data=await api('services');}catch(error){if(error.status===501)return;throw error;}
+ const section=document.createElement('article');section.className='card';section.dataset.module='recovery';section.innerHTML=`<div class="card-header"><h2>自启与自修复</h2>${badge(data.autoStart&&data.autoRepair?'已开启':'部分未开启',data.autoStart&&data.autoRepair?'good':'warn')}</div><form class="card-body" id="service-policy"><p class="muted">建议开启。手动停止、维护和急停始终优先。</p><label class="check-row"><input type="checkbox" name="autoStart" ${data.autoStart?'checked':''}>服务器重启后恢复已开启的服务</label><label class="check-row"><input type="checkbox" name="autoRepair" ${data.autoRepair?'checked':''}>服务异常退出后有限重试</label><div class="settings-actions"><button>保存恢复策略</button></div></form>`;page.append(section);
+ section.querySelector('form').onsubmit=async event=>{event.preventDefault();const form=event.currentTarget;try{await api('services',{method:'POST',data:{action:'policy',autoStart:form.elements.namedItem('autoStart').checked,autoRepair:form.elements.namedItem('autoRepair').checked}});toast('恢复策略已保存');}catch(error){toast(error.message);}};
+ const roleCard=document.createElement('article');roleCard.className='card';roleCard.dataset.module='role';roleCard.innerHTML=`<div class="card-header"><h2>服务器角色</h2>${badge(role(),'info')}</div><div class="card-body"><p>切换角色会停止线路，并保留原角色的用户、统计和配置。日常使用无需修改。</p><button id="switch-role" class="danger">切换为${state.meta.role==='relay'?'出口机':'中转机'}</button></div>`;page.append(roleCard);roleCard.querySelector('button').onclick=async event=>{const actionButton=event.currentTarget;if(!confirm('确认停止当前服务并切换角色？切换后保持急停，需检查配对后重新启动。'))return;actionButton.disabled=true;try{state.meta={...state.meta,...await api('role',{method:'POST',data:{role:state.meta.role==='relay'?'exit':'relay',confirmed:true}})};title();toast('角色已切换，所有线路保持停止');await render();}catch(error){toast(error.message);actionButton.disabled=false;}};
+}
+async function events(page) {
+  const config=await api('bark');
+  const eventRows=await api('events');
+  page.innerHTML=`<div class="notice">推送只在你保存通道并启用事件后发送。粘贴Bark推送链接即可使用普通提醒；完整安全入口仅通过加密消息发送。Bark服务受理后，请确认手机实际收到。</div><div class="settings-grid"><article class="card"><div class="card-header"><h2>Bark 通道</h2><span class="badge ${config.configured?'':'neutral'}">${config.configured?'已配置':'未配置'}</span></div><form id="bark-form" class="card-body"><div class="field"><label>Bark推送链接</label><input name="pushUrl" type="password" autocomplete="off" ${config.configured?'':'required'} placeholder="${config.configured?'已保存，留空保持原链接':'粘贴 https://api.day.app/你的推送Key'}"><small>直接粘贴Bark复制的完整链接，自动提取地址和Key；示例消息及附加参数不会发送。${config.configured?' 当前服务：'+escape(config.server):''}</small></div><details id="bark-encryption"><summary>消息加密（可选）${config.encrypted?' · 已启用':''}</summary><div class="field"><label>手机Bark中设置的加密密钥</label><input name="encryptionKey" type="password" autocomplete="off" placeholder="${config.encrypted?'已保存，留空保持原值':'与手机相同的16或32字节密钥'}"><small>普通提醒只需上面的链接。需要推送完整安全入口时，再填写此项；未设置加密时，入口变化只发提醒，不附管理地址。</small></div>${config.encrypted?'<label class="check-row"><input name="clearEncryption" type="checkbox">关闭消息加密，入口变更只发提醒</label>':''}</details><div class="settings-actions"><button type="button" id="test-bark" ${config.configured?'':'disabled'}>发送测试</button><button class="primary">保存配置</button></div></form></article><article class="card"><div class="card-header"><h2>事件选项</h2></div><div class="card-body" id="event-options">${Object.entries(config.availableEvents).filter(([key])=>key!=='bark.test').map(([key,name])=>`<label class="check-row field"><input type="checkbox" name="event" value="${key}" ${!config.configured||config.events.includes(key)?'checked':''}>${escape(name)}</label>`).join('')}</div></article></div><article class="card"><div class="card-header"><h2>推送队列</h2><span class="status-note">失败会有限重试；不会阻止入口轮换</span></div>${eventRows.events.map(event=>`<div class="audit-item"><time>${when(event.at)}</time><span>${escape(config.availableEvents[event.type]||event.type)}</span><span class="badge neutral">${escape(({pending:'等待发送',accepted:'服务已受理',failed:'发送失败',disabled:'事件已关闭',superseded:'已被新入口替代'})[event.status]||event.status)}</span></div>`).join('')||'<div class="empty">暂无推送事件</div>'}</article>`;
+  page.querySelector('#bark-form').onsubmit=async event=>{
+    event.preventDefault();const form=event.currentTarget;
+    const data={pushUrl:form.elements.namedItem('pushUrl').value.trim(),events:[...page.querySelectorAll('[name=event]:checked')].map(input=>input.value)};
+    if(form.elements.namedItem('clearEncryption')?.checked)data.encryptionKey='';
+    else if(form.elements.namedItem('encryptionKey').value)data.encryptionKey=form.elements.namedItem('encryptionKey').value;
+    try{await api('bark',{method:'PUT',data});form.reset();toast('已保存，请点击“发送测试”确认手机收到');await render();}catch(error){toast(error.message);}
+  };
+  page.querySelector('#test-bark').onclick=async event=>{const button=event.currentTarget;button.disabled=true;try{await api('bark/test',{method:'POST',data:{}});toast('Bark 已受理测试消息，请检查手机');}catch(error){toast(error.message);}finally{button.disabled=false;}};
+}
+async function maintenance(page) {
+  page.innerHTML=`<div class="notice">配置导入会停止本程序线路。导入后保持维护状态，需要重新确认本机环境和 WG 配对。管理入口和管理员账户不会被覆盖。</div><div class="settings-grid"><article class="card"><div class="card-header"><h2>导出配置</h2></div><form id="export-form" class="card-body"><div class="field"><label class="check-row"><input type="checkbox" name="full">完整加密备份</label><small>普通导出不含用户凭证或 Bark 密钥；完整备份包含用户凭证和统计，必须设置独立备份密码。</small></div><div class="field"><label>完整备份密码</label><input name="password" type="password" autocomplete="new-password" minlength="12" placeholder="普通配置导出无需填写"></div><div class="settings-actions"><button class="primary">导出文件</button></div></form></article><article class="card"><div class="card-header"><h2>导入配置</h2></div><form id="import-form" class="card-body"><div class="field"><label>配置文件</label><input name="file" type="file" accept="application/json,.json" required><small>最大8 MB。先预览确认，再覆盖当前配置。</small></div><div class="field"><label>备份密码</label><input name="password" type="password" autocomplete="off" placeholder="仅加密备份需要填写"></div><div class="field"><label>导入用途</label><select name="mode"><option value="clone">复制配置：重新生成用户凭证</option><option value="move">搬家恢复：保留完整备份中的用户凭证</option></select></div><div class="settings-actions"><button>预览导入</button></div></form></article></div><div class="feature-list"><article class="card feature"><h2>角色切换</h2><p>此功能位于系统维护。受控切换和系统服务适配器正在开发，当前不能切换。</p><span class="badge neutral">开发中</span></article><article class="card feature"><h2>急停、更新与卸载</h2><p>尚未发布系统安装器，此开发实例没有修改系统服务的权限。</p><span class="badge neutral">开发中</span></article></div>`;
+  page.querySelector('#export-form').onsubmit=async event=>{
+    event.preventDefault();const form=event.currentTarget;const full=form.elements.namedItem('full').checked;
+    try{const result=await api('backup/export',{method:'POST',data:{full,password:form.elements.namedItem('password').value}});const url=URL.createObjectURL(new Blob([JSON.stringify(result,null,2)],{type:'application/json'}));const link=document.createElement('a');link.href=url;link.download=full?'panel-backup-encrypted.json':'panel-config.json';link.click();toast('文件已生成，请查看浏览器下载列表');setTimeout(()=>URL.revokeObjectURL(url),1000);form.elements.namedItem('password').value='';toast('导出完成，请妥善保存文件');}catch(error){toast(error.message);}
+  };
+  page.querySelector('#import-form').onsubmit=async event=>{
+    event.preventDefault();const form=event.currentTarget;const file=form.elements.namedItem('file').files[0];
+    if(!file||file.size>8*1024*1024)return toast('文件为空或超过8 MB');
+    try{
+      const backup=JSON.parse(await file.text());const password=form.elements.namedItem('password').value;const mode=form.elements.namedItem('mode').value;
+      const preview=await api('backup/preview',{method:'POST',data:{backup,password}});
+      const dialog=document.createElement('dialog');dialog.innerHTML=`<h2>确认导入</h2><p>服务器：${escape(preview.serverName)}</p><p>角色：${preview.role==='exit'?'出口机':'中转机'} · 用户：${preview.users} 位</p><p class="muted">${mode==='move'?'完整备份会保留用户凭证。':'将重新生成用户凭证，旧链接不能用于此副本。'}</p>${preview.requiresConfirmation.map(value=>`<p>· ${escape(value)}</p>`).join('')}<div class="settings-actions"><button id="cancel-import">取消</button><button class="primary" id="confirm-import">确认覆盖并保持停止</button></div>`;document.body.append(dialog);dialog.showModal();
+      const close=()=>{dialog.close();dialog.remove();};dialog.querySelector('#cancel-import').onclick=close;
+      dialog.querySelector('#confirm-import').onclick=async event=>{const actionButton=event.currentTarget;actionButton.disabled=true;try{const result=await api('backup/import',{method:'POST',data:{backup,password,mode,confirmed:true}});state.meta={...state.meta,...result};form.reset();close();title();toast('配置已导入，代理保持维护状态');await render();}catch(error){toast(error.message);actionButton.disabled=false;}};
+    }catch(error){toast(error.message||'文件格式不正确');}
+  };
+}
+async function render(){
+ if(!state.csrf)return login();if(state.meta.onboarding?.active)return renderOnboarding(root,ctx);if(!state.meta.setupComplete)return setup();
+ if(state.meta.uiVersion>=2){if(['lines','certificates','events'].includes(state.page))state.page='services';if(state.page==='monitor')state.page='traffic';}
+ const renderId=++state.renderId;shell();state.refreshCertificate=null;state.refreshServices=null;
+ const names={monitor:'历史监控',overview:'运行总览',users:state.meta.role==='exit'?'中转机管理':'用户管理',traffic:state.meta.role==='exit'?'线路流量':'流量与额度',lines:'线路管理',certificates:'域名与证书',settings:'面板设置',logs:'日志与诊断',events:'消息与告警',maintenance:'备份与维护',help:'使用指南',services:'服务配置'};
+ root.querySelectorAll('[data-page]').forEach(b=>{b.classList.toggle('active',b.dataset.page===state.page);b.setAttribute('aria-current',b.dataset.page===state.page?'page':'false');});
+ root.querySelector('#page-subtitle').textContent=names[state.page];root.querySelector('#breadcrumb-page').textContent=names[state.page];
+ const stage=document.createElement('section');stage.id='page';stage.dataset.page=state.page;
+ try{
+ if(state.page==='overview')await overview(stage);
+ else if(state.page==='users')await users(stage);
+ else if(state.page==='monitor')await mountMonitor(stage,ctx);
+ else if(state.page==='traffic'&&state.meta.uiVersion>=2){const chart=document.createElement('section'),usage=document.createElement('section');stage.append(chart,usage);await mountMonitor(chart,ctx);await livePage('traffic',usage,ctx);state.simpleRefresh=async()=>{await refreshMonitor(chart,ctx);await refreshLive(usage,ctx);};}
+ else if(state.page==='traffic')await livePage('traffic',stage,ctx);
+ else if(state.page==='services')await serviceSettings(stage,ctx);
+ else if(state.page==='lines'){await lines(stage);await serviceControls(stage);organizeConfig(stage,'lines',ctx);}
+ else if(state.page==='certificates'){await certificateControls(stage);organizeConfig(stage,'certificates',ctx);}
+ else if(state.page==='settings'){await settings(stage);await appearanceControls(stage);await panelConnectionControls(stage);await recoveryControls(stage);await healthSettingsControls(stage,ctx);organizeConfig(stage,'settings',ctx);if(state.meta.uiVersion>=2){const tools=document.createElement('details');tools.className='advanced-details';tools.innerHTML='<summary>备份、日志与诊断</summary><div data-simple-tools></div>';stage.append(tools);let loaded=false;tools.ontoggle=async()=>{if(!tools.open||loaded)return;loaded=true;const holder=tools.querySelector('[data-simple-tools]'),backup=document.createElement('section'),records=document.createElement('section');holder.append(backup,records);try{await maintenance(backup);await logs(records);}catch(error){toast(error.message);}};}}
+ else if(state.page==='logs'){await logs(stage);organizeConfig(stage,'logs',ctx);}
+ else if(state.page==='events'){await events(stage);await alertControls(stage);organizeConfig(stage,'events',ctx);}
+ else if(state.page==='maintenance'){await maintenance(stage);await updateControls(stage);await maintenanceExtras(stage);organizeConfig(stage,'maintenance',ctx);}
+ else if(state.page==='help')helpPage(stage,ctx);
+ if(renderId!==state.renderId||!state.csrf)return;
+ root.querySelector('#page').replaceWith(stage);enhanceForms(stage);stampRefresh();
+ }catch(error){if(renderId===state.renderId)toast(error.message);throw error;}
+}
+function stampRefresh(error=false){const node=root.querySelector('#refresh-state');if(node){node.classList.toggle('stale',error);node.innerHTML='<i></i>'+(error?'暂未连通 · 保留上次数据':'已更新 '+new Date().toLocaleTimeString('zh-CN',{hour12:false}));}}
+let refreshing=false;
+async function refreshCurrent(manual=false){
+ if(!state.csrf)return;if(refreshing){if(manual)toast('正在更新，请稍候');return;}refreshing=true;
+ try{const page=root.querySelector('#page');if(state.page==='traffic'&&state.meta.uiVersion>=2&&state.simpleRefresh)await state.simpleRefresh();else if(page&&['overview','users','traffic'].includes(state.page))await refreshLive(page,ctx);else if(state.page==='monitor')await refreshMonitor(page,ctx);else if(['lines','services'].includes(state.page)&&state.refreshServices)await state.refreshServices();else if(state.page==='certificates'&&state.refreshCertificate)await state.refreshCertificate();else if(manual){const meta=await api('meta');Object.assign(state.meta,meta);toast('连接正常，填写内容已保留');}stampRefresh();if(manual&&['overview','users','traffic','monitor','lines','certificates'].includes(state.page))toast('数据已更新');}
+ catch(error){stampRefresh(true);if(manual)throw error;}finally{refreshing=false;}
+}
+installFeedback(ctx);
+installHelp(ctx);
+installMobile(ctx);
+installHealth(ctx);
+installPairingNotifications(ctx);
+window.addEventListener('popstate',()=>{const page=location.hash.slice(1);if(allowedPages.has(page)&&page!==state.page){state.page=page;render().catch(error=>toast(error.message));}});
+try{state.meta=await api('meta');title();const initial=/^#setup=([A-Za-z0-9_-]{32,128})$/.exec(location.hash);if(initial){history.replaceState(null,'',location.pathname);const session=await api('bootstrap',{method:'POST',data:{token:initial[1]}});state.csrf=session.csrf;state.meta=session;}else try{const session=await api('session');state.csrf=session.csrf;state.meta=session;}catch(error){if(error.status!==401)throw error;}await render();}
+catch(error){root.innerHTML='<div class="connection-error" role="alert"><h2>暂时无法获取数据</h2><p>'+escape(error.message||'请检查网络或当前管理入口。')+'</p><button id="retry-connection" class="primary">重新连接</button><p>若安全入口已更新，请查看 Bark 通知或 SSH 应急菜单。</p></div>';root.querySelector('#retry-connection').onclick=()=>location.reload();}
+setInterval(()=>{if(!state.csrf||!state.meta?.setupComplete||document.visibilityState!=='visible'||document.querySelector('dialog[open]'))return;if(['overview','users','traffic','lines','services','monitor'].includes(state.page))refreshCurrent();},5000);

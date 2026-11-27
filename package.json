@@ -1,0 +1,22 @@
+{
+  "name": "vps-panel",
+  "version": "0.2.0",
+  "private": true,
+  "description": "中文中转机与出口机管理面板",
+  "type": "module",
+  "engines": {
+    "node": ">=24.0.0 <25"
+  },
+  "scripts": {
+    "start": "node src/server.mjs",
+    "test": "node --test test/*.test.mjs",
+    "check": "node scripts/check.mjs"
+  },
+  "devDependencies": {
+    "playwright": "^1.65.1"
+  },
+  "dependencies": {
+    "acme-client": "5.4.0",
+    "qrcode": "1.5.4"
+  }
+}

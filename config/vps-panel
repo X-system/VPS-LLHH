@@ -1,0 +1,23 @@
+#!/bin/bash
+set -euo pipefail
+if [[ $(id -u) != 0 ]]; then echo '请以root或sudo运行。'; exit 1; fi
+export VPS_DATA_DIR=/var/lib/vps-panel
+if [[ -f /etc/vps-panel/web.env ]]; then
+ VPS_ORIGIN=$(sed -n 's/^VPS_ORIGIN=//p' /etc/vps-panel/web.env)
+ export VPS_ORIGIN
+fi
+if [[ $# == 0 ]]; then
+ echo 'VPS 面板 SSH 应急菜单'
+ echo '1.查看状态  2.查看入口  3.重置入口  4.重置管理员'
+ echo '5.停止所有线路  6.急停锁定  7.解除急停（不启动）'
+ echo '8.检查更新  9.更新  10.回滚版本  11.卸载保留数据  12.卸载清除数据  13.修复网页服务'
+ read -r -p '请选择：' choice
+ case "$choice" in 1)set -- status;;2)set -- address;;3)set -- reset-entry;;4)set -- reset-password;;5)set -- stop-all;;6)set -- emergency-stop;;7)set -- release-emergency;;8)set -- check-update;;9)set -- update;;10)set -- rollback;;11)set -- uninstall-keep;;12)set -- uninstall-purge;;13)set -- recover-web;;*)exit 1;;esac
+fi
+case "$1" in update|rollback|uninstall-keep|uninstall-purge) read -r -p '此操作会中断服务；清除数据不可恢复。输入 YES 确认：' confirmation;[[ $confirmation == YES ]] || exit 1;;esac
+case "$1" in
+ stop-all|emergency-stop) exec /usr/local/lib/vps-panel/runtime/bin/node /usr/local/lib/vps-panel/app/src/emergency-cli.mjs "$1";;
+ recover-web) systemctl reset-failed vps-panel-agent vps-panel-auth vps-panel-worker vps-panel-web;systemctl start vps-panel-agent vps-panel-auth vps-panel-worker;systemctl restart vps-panel-web;systemctl is-active vps-panel-web;exit;;
+ status|address|reset-entry|reset-password|stop-all|emergency-stop|release-emergency|check-update|update|rollback|uninstall-keep|uninstall-purge) exec runuser -u vps-panel -- env VPS_DATA_DIR="$VPS_DATA_DIR" VPS_ORIGIN="${VPS_ORIGIN:-}" /usr/local/lib/vps-panel/runtime/bin/node /usr/local/lib/vps-panel/app/src/cli.mjs "$1";;
+ *)echo '未知应急操作。';exit 1;;
+esac
