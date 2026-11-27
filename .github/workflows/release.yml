@@ -52,4 +52,5 @@ jobs:
       - name: Publish versioned installer and package
         env:
           GH_RELEASE_TOKEN: ${{ github.token }}
+          LLHH_ROLLING_INSTALLER: "1"
         run: python3 scripts/publish_release.py

@@ -15,6 +15,18 @@ while [[ $# -gt 0 ]]; do
  case "$1" in --source) SOURCE=${2:?缺少源码目录}; shift 2;; --restore) RESTORE=1;shift;; --role) INSTALL_ROLE=${2:?缺少安装角色};shift 2;;*) echo '使用：bash install.sh --source /绝对源码目录 [--role relay|exit] [--restore]' >&2; exit 1;; esac
 done
 [[ -n $SOURCE && $SOURCE = /* && -f $SOURCE/src/server.mjs && -f $SOURCE/config/releases.json ]] || { echo '请提供完整源码的绝对路径。' >&2; exit 1; }
+python3 - "$SOURCE" "$INSTALL_ROLE" <<'VERSION_GUARD'
+import sys,json,pathlib,sqlite3
+source=pathlib.Path(sys.argv[1]);installed=pathlib.Path('/usr/local/lib/vps-panel/app/package.json')
+if installed.exists():assert json.loads(installed.read_text())['version']==json.loads((source/'package.json').read_text())['version'],'已安装其他版本，请使用面板更新；安装器不会覆盖现有版本'
+system=pathlib.Path('/etc/vps-panel/system.json')
+if sys.argv[2]and system.exists():assert json.loads(system.read_text())['role']==sys.argv[2],'已安装其他角色，请在面板内受控切换角色；安装器不会覆盖'
+database=pathlib.Path('/var/lib/vps-panel/panel.sqlite')
+if database.exists():
+ connection=sqlite3.connect(database.as_uri()+'?mode=ro',uri=True)
+ try:assert connection.execute('PRAGMA user_version').fetchone()[0]<=2,'不能用旧版程序恢复新版数据库'
+ finally:connection.close()
+VERSION_GUARD
 for path in /usr/local/lib/vps-panel /etc/vps-panel /var/lib/vps-panel; do [[ ! -L $path ]] || { echo '安装目录不能是符号链接。';exit 1; };done
 if [[ -e /usr/local/lib/vps-panel/app ]]; then
  python3 - <<'PY'
@@ -132,7 +144,7 @@ PY
 install -d -m 755 "$STAGE/runtime" "$STAGE/xray-files" "$STAGE/app"
 tar --no-same-owner -xJf "$STAGE/node" --strip-components=1 -C "$STAGE/runtime"
 unzip -q "$STAGE/xray" -d "$STAGE/xray-files"
-for path in src public config docs scripts package.json package-lock.json README.md AGENTS.md install.sh bootstrap.sh; do cp -a -- "$SOURCE/$path" "$STAGE/app/"; done
+for path in apps src public config docs scripts package.json package-lock.json README.md AGENTS.md install.sh bootstrap.sh; do cp -a -- "$SOURCE/$path" "$STAGE/app/"; done
 find "$STAGE/app" -type l -print -quit | python3 -c 'import sys; assert not sys.stdin.read().strip(),"源码不允许包含符号链接"'
 chown -R root:root "$STAGE/runtime" "$STAGE/app"
 chmod -R go-w "$STAGE/runtime" "$STAGE/app"

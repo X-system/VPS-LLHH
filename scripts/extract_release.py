@@ -10,7 +10,7 @@ with tarfile.open(archive,'r:gz')as tar:
  for member in members:
   path=pathlib.PurePosixPath(member.name)
   if member.name in names or not member.isfile()or path.is_absolute()or'..'in path.parts or'\\'in member.name:raise RuntimeError('Unsafe release member')
-  if path.parts[0]not in('src','public','config','docs','scripts','package.json','package-lock.json','README.md','AGENTS.md','install.sh','bootstrap.sh','release-manifest.json'):raise RuntimeError('Unexpected release member')
+  if path.parts[0]not in('apps','src','public','config','docs','scripts','package.json','package-lock.json','README.md','AGENTS.md','install.sh','bootstrap.sh','release-manifest.json'):raise RuntimeError('Unexpected release member')
   names.add(member.name)
  manifest=json.load(tar.extractfile('release-manifest.json'))
  if manifest.get('format')!='vps-panel-release'or set(manifest['files'])!=names-{'release-manifest.json'}:raise RuntimeError('Release manifest mismatch')

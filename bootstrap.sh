@@ -8,7 +8,9 @@ INSTALL_ROLE=''
 while [[ $# -gt 0 ]]; do
  case "$1" in --repository) REPOSITORY=${2:?缺少仓库};shift 2;;--version) VERSION=${2:?缺少版本};shift 2;;--role)INSTALL_ROLE=${2:?缺少安装角色};shift 2;;--restore)RESTORE=1;shift;;*) echo '参数错误。';exit 1;;esac
 done
-[[ $REPOSITORY =~ ^[A-Za-z0-9][A-Za-z0-9_.-]{0,99}/[A-Za-z0-9][A-Za-z0-9_.-]{0,99}$ && $VERSION =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo '请指定GitHub仓库与正式版本，例如 --repository owner/repo --version v0.1.0';exit 1; }
+[[ $REPOSITORY =~ ^[A-Za-z0-9][A-Za-z0-9_.-]{0,99}/[A-Za-z0-9][A-Za-z0-9_.-]{0,99}$ ]] || { echo '请指定GitHub仓库：--repository owner/repo';exit 1; }
+[[ -z $VERSION || $VERSION =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-test[1-9][0-9]*)?$ ]] || { echo '版本格式错误，例如 v0.2.0-test1';exit 1; }
+[[ -z $INSTALL_ROLE || $INSTALL_ROLE == relay || $INSTALL_ROLE == exit ]] || { echo '安装角色错误。';exit 1; }
 [[ $(id -u) == 0 ]] || { echo '请使用root或sudo。';exit 1; }
 if ! command -v curl >/dev/null || ! command -v python3 >/dev/null || [[ ! -s /etc/ssl/certs/ca-certificates.crt ]];then
  command -v apt-get >/dev/null || { echo '当前安装引导仅支持具备apt的Linux环境。';exit 1; }
@@ -16,30 +18,101 @@ if ! command -v curl >/dev/null || ! command -v python3 >/dev/null || [[ ! -s /e
  apt-get update -qq
  apt-get install -y --no-install-recommends ca-certificates curl python3
 fi
+if [[ -z $INSTALL_ROLE ]];then
+ echo '请选择安装面板：'
+ echo '  1. 中转端'
+ echo '  2. 出口端'
+ echo '  总控端：尚未开发，暂不可安装'
+ [[ -r /dev/tty ]] || { echo '无人值守安装请指定 --role relay 或 --role exit。';exit 1; }
+ while true;do
+  read -r ROLE_CHOICE </dev/tty
+  case "$ROLE_CHOICE" in 1)INSTALL_ROLE=relay;break;;2)INSTALL_ROLE=exit;break;;*)echo '请输入 1 或 2：';;esac
+ done
+fi
+[[ $INSTALL_ROLE == relay ]] && echo '当前选择：中转端' || echo '当前选择：出口端'
+echo '安装版本：'
 STAGE=$(mktemp -d /var/tmp/vps-panel-bootstrap.XXXXXXXX)
+cleanup(){ if [[ $STAGE == /var/tmp/vps-panel-bootstrap.* && -d $STAGE && ! -L $STAGE ]];then rm -rf -- "$STAGE";fi; }
+trap cleanup EXIT
+python3 - "$REPOSITORY" "$STAGE/versions.json" "$INSTALL_ROLE" <<'CATALOG'
+import sys,json,re,urllib.request
+repo=sys.argv[1];role=sys.argv[3];found={}
+pattern=r'v(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-test([1-9]\d*))?'
+for page in range(1,11):
+ req=urllib.request.Request('https://api.github.com/repos/'+repo+'/releases?per_page=100&page='+str(page),headers={'User-Agent':'VPS-LLHH-installer','Accept':'application/vnd.github+json'})
+ with urllib.request.urlopen(req,timeout=30)as response:releases=json.load(response)
+ if not isinstance(releases,list):raise RuntimeError('发布列表格式错误')
+ for release in releases:
+  tag=release.get('tag_name','');prefix=role+'-';version_tag=tag[len(prefix):]if tag.startswith(prefix)else '';match=re.fullmatch(pattern,version_tag)
+  if not match or release.get('draft')or '<!-- llhh:installer -->'in(release.get('body')or ''):continue
+  test=match[4]is not None
+  if bool(release.get('prerelease'))!=test:continue
+  name='vps-panel-'+version_tag+'.tar.gz';url='https://github.com/'+repo+'/releases/download/'+tag+'/'+name
+  asset=next((a for a in release.get('assets',[])if a.get('name')==name),None)
+  if not asset or asset.get('browser_download_url')!=url or not re.fullmatch(r'sha256:[a-f0-9]{64}',asset.get('digest',''))or not 0<asset.get('size',0)<=20*1024*1024:continue
+  found[tag]={'tag':version_tag,'releaseTag':tag,'label':version_tag[1:]+('（测试版）'if test else ''),'sha256':asset['digest'][7:],'sort':tuple(map(int,match.group(1,2,3)))+(int(match[4])if test else 0,test is False)}
+ if len(releases)<100:break
+if not found:raise RuntimeError('暂时没有可安装的发布版本，请稍后重试')
+# A stable release follows every test build of the same base version.
+items=sorted(found.values(),key=lambda a:(*a['sort'][:3],a['sort'][4],a['sort'][3]))
+with open(sys.argv[2],'w')as output:json.dump(items,output)
+for i,item in enumerate(items,1):print(str(i)+'. '+item['label'])
+CATALOG
+if [[ -z $VERSION ]];then
+ echo '请选择安装版本（输入序号）：'
+ [[ -r /dev/tty ]] || { echo '无人值守安装请通过 --version v0.2.0-test1 指定版本。';exit 1; }
+ while true;do
+  read -r CHOICE </dev/tty
+  if [[ $CHOICE =~ ^[1-9][0-9]{0,3}$ ]];then
+   VERSION=$(python3 -c 'import json,sys;items=json.load(open(sys.argv[1]));n=int(sys.argv[2]);print(items[n-1]["tag"]if 0<n<=len(items)else "")' "$STAGE/versions.json" "$CHOICE")
+   [[ -z $VERSION ]] || break
+  fi
+  echo '序号无效，请重新输入：'
+ done
+fi
+EXPECTED=$(python3 -c 'import json,sys;items=json.load(open(sys.argv[1]));item=next((a for a in items if a["tag"]==sys.argv[2]),None);assert item,"此版本尚未发布或发布包校验信息不完整";print(item["sha256"])' "$STAGE/versions.json" "$VERSION")
+python3 - "$VERSION" <<'EXISTING'
+import sys,json,pathlib
+path=pathlib.Path('/usr/local/lib/vps-panel/app/package.json')
+if path.exists():
+ assert not path.is_symlink(),'安装目录不安全'
+ assert json.loads(path.read_text())['version']==sys.argv[1][1:],'已安装其他版本。安装器不会覆盖或降级现有面板，请使用面板更新；需要切换到旧版时先卸载并使用空白数据目录。'
+EXISTING
 ASSET="vps-panel-$VERSION.tar.gz"
-BASE="https://github.com/$REPOSITORY/releases/download/$VERSION"
-curl --proto '=https' --tlsv1.2 -fL --connect-timeout 15 --max-time 180 "$BASE/$ASSET" -o "$STAGE/$ASSET"
-curl --proto '=https' --tlsv1.2 -fL --connect-timeout 15 --max-time 30 "$BASE/$ASSET.sha256" -o "$STAGE/checksum"
-python3 - "$STAGE/$ASSET" "$STAGE/checksum" "$STAGE/source" <<'PY'
-import sys,pathlib,hashlib,tarfile
-archive=pathlib.Path(sys.argv[1]);expected=pathlib.Path(sys.argv[2]).read_text().split()[0]
-assert len(expected)==64 and hashlib.sha256(archive.read_bytes()).hexdigest()==expected,'发布包校验失败'
+BASE="https://github.com/$REPOSITORY/releases/download/$INSTALL_ROLE-$VERSION"
+curl --proto '=https' --tlsv1.2 -fL --connect-timeout 15 --max-time 180 --max-filesize 20971520 "$BASE/$ASSET" -o "$STAGE/$ASSET"
+python3 - "$STAGE/$ASSET" "$EXPECTED" "$STAGE/source" "$VERSION" <<'PACKAGE'
+import sys,pathlib,hashlib,tarfile,json,sqlite3
+archive=pathlib.Path(sys.argv[1]);assert hashlib.sha256(archive.read_bytes()).hexdigest()==sys.argv[2],'发布包校验失败'
 target=pathlib.Path(sys.argv[3]);target.mkdir(mode=0o700)
-# Bootstrap extraction is deliberately restricted before executing any package code.
 with tarfile.open(archive,'r:gz')as tar:
  members=tar.getmembers();assert len(members)<5000 and sum(m.size for m in members)<40*1024*1024
  names=set()
  for member in members:
   path=pathlib.PurePosixPath(member.name)
   assert member.isfile()and not path.is_absolute()and'..'not in path.parts and'\\'not in member.name and member.name not in names
-  names.add(member.name);destination=target/member.name;destination.parent.mkdir(parents=True,exist_ok=True)
-  with destination.open('xb')as file:file.write(tar.extractfile(member).read())
-PY
+  names.add(member.name)
+ manifest=json.load(tar.extractfile('release-manifest.json'))
+ assert manifest.get('format')=='vps-panel-release'and manifest['version']==sys.argv[4][1:]and set(manifest['files'])==names-{'release-manifest.json'},'发布清单不匹配'
+ assert json.load(tar.extractfile('package.json'))['version']==manifest['version'],'版本不匹配'
+ database=pathlib.Path('/var/lib/vps-panel/panel.sqlite')
+ if database.exists():
+  connection=sqlite3.connect(database.as_uri()+'?mode=ro',uri=True)
+  try:assert connection.execute('PRAGMA user_version').fetchone()[0]<=manifest['schemaVersion'],'不能用旧版程序恢复新版数据库'
+  finally:connection.close()
+ for member in members:
+  data=tar.extractfile(member).read()
+  if member.name!='release-manifest.json':assert hashlib.sha256(data).hexdigest()==manifest['files'][member.name],'文件校验失败'
+  destination=target/member.name;destination.parent.mkdir(parents=True,exist_ok=True)
+  with destination.open('xb')as file:file.write(data)
+PACKAGE
 INSTALL_ARGS=()
 [[ $RESTORE == 0 ]] || INSTALL_ARGS+=(--restore)
-[[ -z $INSTALL_ROLE ]] || INSTALL_ARGS+=(--role "$INSTALL_ROLE")
+if [[ -n $INSTALL_ROLE ]];then
+ python3 -c 'import json,sys;assert json.load(open(sys.argv[1])).get("installRoleArgument"),"这个历史版本在网页中选择角色，不支持 --role 参数"' "$STAGE/source/release-manifest.json"
+ INSTALL_ARGS+=(--role "$INSTALL_ROLE")
+fi
+echo "正在安装：${VERSION#v}"
 bash "$STAGE/source/install.sh" --source "$STAGE/source" "${INSTALL_ARGS[@]}"
 printf '%s\n' "$REPOSITORY" >/etc/vps-panel/repository
 chmod 600 /etc/vps-panel/repository
-if [[ $STAGE == /var/tmp/vps-panel-bootstrap.* && -d $STAGE && ! -L $STAGE ]]; then rm -rf -- "$STAGE";fi

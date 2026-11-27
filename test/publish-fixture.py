@@ -22,7 +22,7 @@ class Opener:
         if url.startswith('https://uploads.github.com/'):
             if mode=='failure':raise urllib.error.HTTPError(url,403,'denied',{},None)
             return Response({'size':len(request.data),'digest':'sha256:'+hashlib.sha256(request.data).hexdigest()})
-        assert method=='PATCH';assert len([r for r in requests if r.full_url.startswith('https://uploads.github.com/')])==4
+        assert method=='PATCH';assert len([r for r in requests if r.full_url.startswith('https://uploads.github.com/')])in (4,8)
         assert json.loads(request.data)['draft']is False;published=True;return Response({})
 
 with tempfile.TemporaryDirectory()as temporary:
@@ -36,7 +36,7 @@ with tempfile.TemporaryDirectory()as temporary:
             assert not published
         else:
             publisher.main();assert published==(mode!='existing')
-    if mode=='existing':assert len(requests)==1
+    if mode=='existing':assert len(requests)==2
     for invalid in ['owner/repo;reboot','owner/repo\nsecret','../repo']:
         try:publisher.installer(invalid,'v0.2.0',"REPOSITORY=''\nVERSION=''\n")
         except ValueError:pass

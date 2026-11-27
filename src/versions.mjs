@@ -1,0 +1,4 @@
+const expression=/^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-test([1-9]\d*))?$/;
+export function parseVersion(value){const match=typeof value==='string'&&expression.exec(value);if(!match)return null;const numbers=match.slice(1).map(n=>n===undefined?null:Number(n));if(numbers.some(n=>n!==null&&!Number.isSafeInteger(n)))return null;return{major:numbers[0],minor:numbers[1],patch:numbers[2],test:numbers[3]};}
+export function compareVersions(a,b){a=parseVersion(a);b=parseVersion(b);if(!a||!b)throw new Error('版本号格式错误');for(const key of['major','minor','patch'])if(a[key]!==b[key])return a[key]>b[key]?1:-1;if(a.test===b.test)return 0;if(a.test===null)return 1;if(b.test===null)return-1;return a.test>b.test?1:-1;}
+export function versionLabel(value){const parsed=parseVersion(value);if(!parsed)throw new Error('版本号格式错误');return value+(parsed.test!==null?'（测试版）':'');}

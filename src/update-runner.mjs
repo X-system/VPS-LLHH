@@ -6,6 +6,7 @@ import{DatabaseSync,backup}from'node:sqlite';
 import https from'node:https';
 import tls from'node:tls';
 import{join}from'node:path';
+import{parseVersion}from'./versions.mjs';
 import{createSystemDriver,atomicWrite}from'./system-driver.mjs';
 
 if(process.platform!=='linux'||process.getuid()!==0)throw new Error('更新程序只能由Linux的root运行');
@@ -56,7 +57,8 @@ async function health(){
  throw new Error('更新后面板自检未通过');
 }
 async function download(request,path){
- if(!/^https:\/\/github\.com\/[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+\/releases\/download\/v\d+\.\d+\.\d+\/vps-panel-v\d+\.\d+\.\d+\.tar\.gz$/.test(request.url)||!Number.isInteger(request.size)||request.size>20*1024*1024||!/^[a-f0-9]{64}$/.test(request.sha256))throw new Error('发布任务参数错误');
+ const role=JSON.parse(await readFile(join(directory,'system.json'),'utf8')).role;
+ if(!['relay','exit'].includes(request.role)||request.role!==role||!parseVersion(request.version)||!/^[-A-Za-z0-9_.]+\/[-A-Za-z0-9_.]+$/.test(request.repository||'')||request.url!==`https://github.com/${request.repository}/releases/download/${role}-v${request.version}/vps-panel-v${request.version}.tar.gz`||!Number.isInteger(request.size)||request.size<=0||request.size>20*1024*1024||!/^[a-f0-9]{64}$/.test(request.sha256))throw new Error('发布任务参数错误');
  const response=await fetch(request.url,{signal:AbortSignal.timeout(180000)});if(!response.ok)throw new Error('发布包下载失败');
  const chunks=[];let size=0;for await(const chunk of response.body){size+=chunk.length;if(size>request.size||size>20*1024*1024)throw new Error('发布包大小异常');chunks.push(chunk);}
  const content=Buffer.concat(chunks);if(size!==request.size||createHash('sha256').update(content).digest('hex')!==request.sha256)throw new Error('发布包SHA256校验失败');

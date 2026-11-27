@@ -1,10 +1,10 @@
 """Build a source-only release. Never include local runtime data or credentials."""
-import hashlib,json,pathlib,tarfile,gzip,io
+import hashlib,json,pathlib,tarfile,gzip,io,re
 ROOT=pathlib.Path(__file__).resolve().parents[1]
 VERSION=json.loads((ROOT/'package.json').read_text(encoding='utf-8'))['version']
-assert all(character.isdigit()or character=='.'for character in VERSION)
+assert re.fullmatch(r'(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)(?:-test[1-9]\d*)?',VERSION)
 OUTPUT=ROOT/'dist';OUTPUT.mkdir(exist_ok=True)
-ALLOWED=('src','public','config','docs','scripts','package.json','package-lock.json','README.md','AGENTS.md','install.sh','bootstrap.sh')
+ALLOWED=('apps','src','public','config','docs','scripts','package.json','package-lock.json','README.md','AGENTS.md','install.sh','bootstrap.sh')
 files=[]
 for item in ALLOWED:
  path=ROOT/item
@@ -17,7 +17,7 @@ for item in ALLOWED:
    if file.name.startswith('.env')or file.suffix.lower()in('.pem','.key','.p12','.pfx','.sqlite','.db','.pcap','.pcapng','.log','.backup'):raise RuntimeError('Private file type in release tree: '+name)
    if (name.endswith('.sh')or name=='config/vps-panel')and b'\r'in file.read_bytes():raise RuntimeError('Executable source must use LF line endings: '+name)
    files.append((name,file))
-manifest={'format':'vps-panel-release','version':VERSION,'runtimeMajor':24,'schemaVersion':2,'files':{name:hashlib.sha256(file.read_bytes()).hexdigest()for name,file in files}}
+manifest={'format':'vps-panel-release','version':VERSION,'runtimeMajor':24,'schemaVersion':2,'installRoleArgument':'--role)'in(ROOT/'install.sh').read_text(encoding='utf-8'),'files':{name:hashlib.sha256(file.read_bytes()).hexdigest()for name,file in files}}
 archive=OUTPUT/('vps-panel-v'+VERSION+'.tar.gz')
 with archive.open('wb')as target,gzip.GzipFile(filename='',mode='wb',fileobj=target,mtime=0)as compressed,tarfile.open(fileobj=compressed,mode='w')as tar:
  for name,file in files:

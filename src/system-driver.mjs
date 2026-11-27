@@ -44,7 +44,7 @@ export function createSystemDriver({directory='/etc/vps-panel',coreDirectory='/u
  async function maintenanceLock(kind){
   await assertMaintenanceIdle();await writeFile(join(directory,'maintenance.lock'),JSON.stringify({kind,at:Date.now()}),{mode:0o600,flag:'wx'});
  }
- const updates=createUpdateManager({directory,coreDirectory,schedule:async(script,mode)=>{
+ const updates=createUpdateManager({directory,coreDirectory,getRole:async()=> (await state()).role||'relay',schedule:async(script,mode)=>{
   await maintenanceLock('update');
   try{await call('systemdRun',['--unit=vps-panel-update','--on-active=4s','--collect','--timer-property=RemainAfterElapse=no','--',join(coreDirectory,'runtime/bin/node'),script,mode]);}
   catch(error){await unlink(join(directory,'maintenance.lock'));throw error;}
