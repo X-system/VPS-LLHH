@@ -25,7 +25,15 @@ node src/cli.mjs address
 
 当前安装器开放Debian12 amd64；Debian13尚未开放正式安装。安装会校验固定版本的Node、Xray及Hysteria下载，创建独立账户与系统服务，自动检查WG和防火墙能力。安装完成只启动管理服务，代理保持停止。
 
-使用已经取得并检查的完整源码目录安装，例如：
+以root登录Debian12 amd64，执行这一条命令：
+
+```sh
+bash -c 'set -euo pipefail; curl --proto =https --tlsv1.2 -fsSL --retry 2 https://github.com/X-system/VPS-LLHH/releases/latest/download/bootstrap.sh | bash'
+```
+
+安装时选择：`1` 中转端，或 `2` 出口端。安装完成后打开终端显示的一次性设置链接，继续网页引导。首次通过IP访问会使用自签证书，浏览器可能提示证书未受信任；先核对服务器地址。
+
+也可使用已经取得并检查的完整源码目录安装，例如：
 
 ```sh
 bash /opt/vps-panel-source/install.sh --source /opt/vps-panel-source
@@ -37,7 +45,7 @@ SSH输入`vps-panel`打开应急菜单。停止和急停可绕过网页及本机
 
 卸载分为保留数据和清除数据。保留数据后恢复安装使用`install.sh --source /绝对源码目录 --restore`，沿用管理员、入口、用户和用量，代理保持急停；网页从恢复引导继续，不重复设置已有账户，重新确认配对和启动。
 
-网页支持面板版本更新及回滚，变更期间代理停止，自检失败自动恢复。当前不自动升级Node或协议核心二进制，遇到组件摘要变化会拒绝该版本。项目计划通过公开GitHub仓库与Release分发，现有下载引导和在线更新使用公开Release。仓库地址确认并完成线上下载验收前，不提供指向未发布版本的一键下载命令。
+网页支持面板版本更新及回滚，变更期间代理停止，自检失败自动恢复。当前不自动升级Node或协议核心二进制，遇到组件摘要变化会拒绝该版本。代码仓库：[X-system/VPS-LLHH](https://github.com/X-system/VPS-LLHH)。安装和在线更新使用[公开Release](https://github.com/X-system/VPS-LLHH/releases/latest)，安装包和脚本均附带SHA256校验文件。已在干净的Debian12中转测试机验证公网安装入口；正式使用前仍建议在自己的服务器验收。
 
 ## 本轮简化版本（0.2.0）
 
@@ -54,7 +62,7 @@ SSH输入`vps-panel`打开应急菜单。停止和急停可绕过网页及本机
 - [后续总控接口边界](docs/controller-contract.md)
 - [后续AI辅助配置边界](docs/automation-contract.md)（设计预留，尚未实现）
 
-项目源代码将公开。项目自身的许可证尚待作者确定；第三方组件保留各自许可，BBRX所用Linux原始源码保留原有许可声明。
+项目源代码已公开。项目自身的许可证尚待作者确定；第三方组件保留各自许可，BBRX所用Linux原始源码保留原有许可声明。
 
 ## TCP加速
 
