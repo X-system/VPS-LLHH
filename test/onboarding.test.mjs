@@ -14,12 +14,12 @@ async function fixture(t,driver=setupDriver()){
  const flow=createOnboarding({store,request:driver.request});t.after(async()=>{await flow.wait();store.close();rmSync(directory,{recursive:true,force:true});});return{store,flow,driver};
 }
 async function untilReview(f){
- await f.flow.advance({step:'account',username:'我的管理员',password:'new-test-password'});await f.flow.advance({step:'name',serverName:'测试中转'});await f.flow.advance({step:'protocols',protocols:['vmess']});await f.flow.advance({step:'bark',skip:true});await f.flow.advance({step:'pairing',useAtt:false});
+ await assert.rejects(f.flow.advance({step:'account',username:'我的管理员',password:''}),/不能为空/);await f.flow.advance({step:'account',username:'我的管理员',password:'1'});await f.flow.advance({step:'name',serverName:'测试中转'});await f.flow.advance({step:'protocols',protocols:['vmess']});await f.flow.advance({step:'bark',skip:true});await f.flow.advance({step:'pairing',useAtt:false});
 }
 test('首次引导逐步保存；TCP直出不出现证书要求，不要求WG，最后自动生成并检查',async t=>{
  const f=await fixture(t);await assert.rejects(f.flow.advance({step:'protocols',protocols:['vmess']}),/进度/);
  await untilReview(f);assert.equal(f.flow.view().step,'review');assert.ok(!f.flow.view().steps.includes('certificate'));
- const admin=f.store.db.prepare('SELECT * FROM admin').get();assert.equal(admin.username,'我的管理员');assert.equal(await verifyPassword('new-test-password',admin.password),true);assert.ok(!JSON.stringify(f.flow.view()).includes('new-test-password'));
+ const admin=f.store.db.prepare('SELECT * FROM admin').get();assert.equal(admin.username,'我的管理员');assert.equal(await verifyPassword('1',admin.password),true);assert.ok(!JSON.stringify(f.flow.view()).includes('new-test-password'));
  const result=await f.flow.advance({step:'review',confirmed:true});assert.equal(result.job.state,'running');await f.flow.wait();
  assert.equal(f.flow.view().active,false);assert.equal(f.store.get('onboarded'),true);assert.equal(f.driver.state().relay.attEnabled,false);
  assert.deepEqual(f.driver.calls.filter(call=>call.action==='start').map(call=>call.data.stream),['vmess.direct']);

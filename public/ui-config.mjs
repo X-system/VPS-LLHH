@@ -1,6 +1,6 @@
 import{esc,icon,badge}from'./ui-kit.mjs';
 const headings={lines:['线路管理','先看运行状态，需要调整时再展开配置。','network'],certificates:['域名与证书','按步骤完成一次配置，后续自动续签。','certificates'],settings:['面板设置','管理账户、外观和访问方式。','security'],events:['消息与告警','粘贴手机 Bark 链接，选择需要的提醒。','bark'],logs:['日志与诊断','出问题先看记录，需要帮助时导出诊断。','maintenance'],maintenance:['备份与维护','日常建议保存完整加密备份，恢复前先预览。','maintenance']};
-function intro(kind){const [title,note,topic]=headings[kind];const node=document.createElement('div');node.className='section-intro';node.innerHTML=`<div><h2>${title}</h2><p>${note}</p></div><button class="guide-link" data-guide-open="${topic}">${icon('help')} 配置教程</button>`;return node;}
+function intro(kind){const [title,note,topic]=headings[kind];const node=document.createElement('div');node.className='section-intro';node.innerHTML=`<div><h2>${title}</h2><p>${note}</p></div><div data-refresh-slot data-preserve></div>`;return node;}
 function tabbed(page,kind,definitions,ctx,initial){
  const holder=document.createElement('div');holder.className='module-tabs';holder.innerHTML=`<div class="tabbar" role="tablist">${definitions.map(([id,label])=>`<button type="button" role="tab" data-config-tab="${id}">${label}</button>`).join('')}</div>`;
  for(const[id]of definitions){const slot=document.createElement('section');slot.dataset.configSlot=id;slot.className='tab-panel';slot.setAttribute('role','tabpanel');holder.append(slot);}

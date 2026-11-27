@@ -25,7 +25,6 @@ export function actionFeedback(owner,message,{kind='success',duration=6000}={}){
  if(duration&&kind!=='pending')entry.timer=setTimeout(()=>{entry.node.remove();visibleMessages.delete(entry);messages.delete(entry.owner);},duration);
  return entry;
 }
-function finishFeedback(owner){const entry=messages.get(owner);if(entry?.kind==='pending'){if(owner.isConnected)actionFeedback(owner,'操作已完成');else{entry.node.remove();visibleMessages.delete(entry);}}}
 export function loadingMarkup(){return '<div class="connection-loader" role="status" aria-live="polite"><div class="spectrum" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div><strong>正在获取面板数据</strong></div>';}
 export function installFeedback(ctx){
  function bind(node,key){
@@ -36,8 +35,8 @@ export function installFeedback(ctx){
    if(control)lastControl=control;
    let result;try{result=original.call(this,event);}catch(error){actionFeedback(control,error.message||'操作未完成，请重试',{kind:'error'});return;}
    if(!result||typeof result.then!=='function')return result;
-   if(control){pending.add(control);control.dataset.busy='';control.setAttribute('aria-busy','true');}const notice=control?setTimeout(()=>actionFeedback(control,'正在处理，请稍候…',{kind:'pending',duration:0}),180):null;
-   return Promise.resolve(result).catch(error=>actionFeedback(control,error.message||'操作未完成，请重试',{kind:'error'})).finally(()=>{clearTimeout(notice);if(control){pending.delete(control);delete control.dataset.busy;control.removeAttribute('aria-busy');finishFeedback(control);}});
+   if(control){pending.add(control);control.dataset.busy='';control.setAttribute('aria-busy','true');}
+   return Promise.resolve(result).catch(error=>actionFeedback(control,error.message||'操作未完成，请重试',{kind:'error'})).finally(()=>{if(control){pending.delete(control);delete control.dataset.busy;control.removeAttribute('aria-busy');}});
   };handler[wrapped]=true;node[key]=handler;
  }
  function enhance(scope){for(const node of [scope,...scope.querySelectorAll('*')]){bind(node,'onclick');bind(node,'onsubmit');}}

@@ -10,6 +10,8 @@ export function setupDriver({onConfigure,publicIPv4='11.0.0.2',role='relay'}={})
   if(Object.hasOwn(data,'expectedAutomationToken')&&data.expectedAutomationToken!==automation)throw new Error('已收到新的手动停止操作');
   if(action==='tcp-acceleration-set')acceleration=data.mode;
   if(['tcp-acceleration-status','tcp-acceleration-set'].includes(action))return{mode:acceleration,effective:acceleration==='off'?'cubic':acceleration,bbrxSupported:true,job:null};
+  if(action==='update-status')return{currentVersion:'0.2.0-test2',repository:null,job:null};
+  if(action==='panel-status')return{port:18443,origin:'https://11.0.0.2:18443',useDomainCertificate:false,availableDomain:null};
   if(action==='inspect')return info();
   if(action==='plan-relay')return{...info(),ports:relay?.ports||ports};
   if(action==='plan-network')return{listenPort:role==='exit'?51874:51820};

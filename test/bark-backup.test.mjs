@@ -42,8 +42,8 @@ test('Bark加密载荷与官方CBC协议兼容，入口只在密文中',()=>{
 test('推送去重、冷却、退避与最多5次重试；不发送真实通知',async t=>{
   let now=1700000000000;const store=await fixture(t,()=>now);
   configureBark(store,{server:'https://bark.example.invalid',deviceKey:'test-device-key'});
-  const id=enqueueEvent(store,'service.failed',{body:'测试异常'});
-  assert.ok(id);assert.equal(enqueueEvent(store,'service.failed',{body:'重复'}),null);
+  const id=enqueueEvent(store,'user.spike',{body:'测试异常'});
+  assert.ok(id);assert.equal(enqueueEvent(store,'user.spike',{body:'重复'}),null);
   let requests=0;
   const fetchImpl=async()=>{requests++;throw new Error('mock failure');};
   await dispatchEvents(store,{fetchImpl});

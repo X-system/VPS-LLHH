@@ -31,7 +31,7 @@ test('真实浏览器：登录、角色向导、用户编辑、设置与移动�
   await page.getByRole('heading',{name:'初始化服务器'}).waitFor();
   await page.locator('input[name=serverName]').fill('浏览器验收中转');
   await page.getByRole('button',{name:'保存初始设置'}).click();
-  await page.getByRole('heading',{name:'浏览器验收中转',exact:true}).waitFor();
+  await page.locator('.server-identity strong').filter({hasText:'浏览器验收中转'}).waitFor();
   await page.getByText('等待实际流量采样').waitFor();
   await page.screenshot({path:'test-results/overview.png',fullPage:true});
   await page.getByRole('button',{name:'用户管理',exact:true}).click();
@@ -49,7 +49,7 @@ test('真实浏览器：登录、角色向导、用户编辑、设置与移动�
   await page.locator('#settings-form input[name=serverName]').fill('自定义名称测试');
   await page.locator('#settings-form input[name=rotationDays]').fill('7');
   await page.getByRole('button',{name:'保存设置',exact:true}).click();
-  await page.getByRole('heading',{name:'自定义名称测试',exact:true}).waitFor();
+  await page.locator('.server-identity strong').filter({hasText:'自定义名称测试'}).waitFor();
   assert.match(await page.title(),/自定义名称测试/);
   assert.equal(app.store.get('settings').rotationDays,7);
   await page.getByRole('tab',{name:'外观',exact:true}).click();
@@ -98,7 +98,7 @@ test('出口端网页：配对多台中转、证书进度不清空表单、告�
  mkdirSync('test-results',{recursive:true});await page.goto(`http://127.0.0.1:${app.server.address().port}/${app.store.get('entrance').value}/`);
  await page.locator('#username').fill('admin');await page.locator('#password').fill('browser-test-password-only');await page.getByRole('button',{name:'登录',exact:true}).click();
  await page.locator('input[name=serverName]').fill('出口机界面验收');await page.locator('input[name=role][value=exit]').check();await page.getByRole('button',{name:'保存初始设置'}).click();
- await page.getByRole('heading',{name:'出口机界面验收',exact:true}).waitFor();assert.equal(await page.getByRole('button',{name:'用户管理',exact:true}).count(),0);
+ await page.locator('.server-identity strong').filter({hasText:'出口机界面验收'}).waitFor();assert.equal(await page.getByRole('button',{name:'用户管理',exact:true}).count(),0);
  await page.locator('.metric-value').nth(3).waitFor();assert.equal((await page.locator('.metric-value').nth(2).innerText()).trim(),'—','初次CPU采样未知时仍正常显示总览');
  assert.equal(await page.getByRole('button',{name:'切换为中转机',exact:true}).count(),0);await page.screenshot({path:'test-results/exit-overview.png',fullPage:true});
  await page.getByRole('button',{name:'域名与证书',exact:true}).click();await page.locator('#certificate-form').waitFor();

@@ -25,7 +25,7 @@ export async function atomicWrite(path,content,mode=0o600){
  const temporary=path+'.'+randomBytes(12).toString('hex')+'.tmp';
  try{await writeFile(temporary,content,{mode,flag:'wx'});await rename(temporary,path);}finally{await unlink(temporary).catch(error=>{if(error.code!=='ENOENT')throw error;});}
 }
-export function createSystemDriver({directory='/etc/vps-panel',coreDirectory='/usr/local/lib/vps-panel',unitDirectory='/etc/systemd/system',readInterfaces=networkInterfaces,runner=execute}={}){
+export function createSystemDriver({directory='/etc/vps-panel',coreDirectory='/usr/local/lib/vps-panel',unitDirectory='/etc/systemd/system',readInterfaces=networkInterfaces,runner=execute,maintenanceOwner=null}={}){
  const certificates=createCertificateManager({directory:join(directory,'certs')});
  const firewall=createFirewall({runner});
  const tcpAcceleration=createTcpAcceleration({directory,coreDirectory,runner});
@@ -36,6 +36,7 @@ export function createSystemDriver({directory='/etc/vps-panel',coreDirectory='/u
  };
  const statePath=join(directory,'system.json');
  async function assertMaintenanceIdle(){
+  if(maintenanceOwner==='update'){const lock=JSON.parse(await readFile(join(directory,'maintenance.lock'),'utf8'));if(lock.kind==='update')return;}
   const path=join(directory,'maintenance.lock');
   try{await readFile(path);let active=false;try{await call('systemctl',['is-active','--quiet','vps-panel-update.service','vps-panel-update.timer','vps-panel-uninstall.service','vps-panel-uninstall.timer','vps-panel-rebind.service','vps-panel-rebind.timer']);active=true;}catch(error){if(![3,4].includes(error.code))throw error;}
    if(active)throw new Error('正在执行另一项维护任务');await unlink(path);
@@ -44,7 +45,7 @@ export function createSystemDriver({directory='/etc/vps-panel',coreDirectory='/u
  async function maintenanceLock(kind){
   await assertMaintenanceIdle();await writeFile(join(directory,'maintenance.lock'),JSON.stringify({kind,at:Date.now()}),{mode:0o600,flag:'wx'});
  }
- const updates=createUpdateManager({directory,coreDirectory,getRole:async()=> (await state()).role||'relay',schedule:async(script,mode)=>{
+ const updates=createUpdateManager({directory,coreDirectory,getRole:async()=> (await state()).role||'relay',isRunning:async()=>{try{await call('systemctl',['is-active','--quiet','vps-panel-update.service','vps-panel-update.timer']);return true;}catch(e){if([3,4].includes(e.code))return false;throw e;}},schedule:async(script,mode)=>{
   await maintenanceLock('update');
   try{await call('systemdRun',['--unit=vps-panel-update','--on-active=4s','--collect','--timer-property=RemainAfterElapse=no','--',join(coreDirectory,'runtime/bin/node'),script,mode]);}
   catch(error){await unlink(join(directory,'maintenance.lock'));throw error;}
@@ -63,7 +64,7 @@ export function createSystemDriver({directory='/etc/vps-panel',coreDirectory='/u
   const result={};
   for(const[kind,file]of[['update','update-state.json'],['panel','panel-rebind-state.json']])try{
    const value=JSON.parse(await readFile(join(directory,file),'utf8'));
-   if(Number.isSafeInteger(value.at)&&value.at>=0)result[kind]={at:value.at,failed:kind==='panel'?value.ok===false:['failed','failed-rolled-back','failed-needs-ssh','rollback-failed-restored-current'].includes(value.step)};
+   if(Number.isSafeInteger(value.at)&&value.at>=0)result[kind]={at:value.at,failed:kind==='panel'?value.ok===false:['failed','failed-interrupted','failed-to-start','failed-rolled-back','failed-needs-ssh','rollback-failed-restored-current'].includes(value.step)};
   }catch(error){if(error.code!=='ENOENT'&&!(error instanceof SyntaxError))throw error;}
   return result;
  }
@@ -275,7 +276,7 @@ export function createSystemDriver({directory='/etc/vps-panel',coreDirectory='/u
   const ticket=Object.fromEntries(['emergency','network','automation',...streams].map(name=>[name,readFuse(directory,name)]));
   if(['stop','stop-all','network-down','emergency-stop'].includes(action)&&!Object.hasOwn(data,'expectedAutomationToken'))tripFuse(directory,'automation');
   if(Object.hasOwn(data,'expectedAutomationToken')&&readFuse(directory,'automation')!==data.expectedAutomationToken)throw new Error('已收到新的手动停止操作，自动配置已取消');
-  if(['start','restart','configure-relay','configure-network','switch-role','release-emergency','policy','certificate-configure','certificate-issue','update-source','update-start','update-rollback','network-up','panel-configure','reload-panel-certificate','reload-hy2-certificate','repair-profile','repair-network','repair-guard','forget-network'].includes(action))await assertMaintenanceIdle();
+  if(['start','restart','configure-relay','configure-network','switch-role','release-emergency','policy','certificate-configure','certificate-issue','update-source','update-start','update-reserve','update-cancel','update-rollback','network-up','panel-configure','reload-panel-certificate','reload-hy2-certificate','repair-profile','repair-network','repair-guard','forget-network'].includes(action))await assertMaintenanceIdle();
   if(action==='inspect')return actionInspect();
   if(action==='plan-relay'){
    const current=await state(),info=await actionInspect();
@@ -349,8 +350,11 @@ export function createSystemDriver({directory='/etc/vps-panel',coreDirectory='/u
    await call('systemctl',['restart','vps-panel-web.service']);return{reloaded:true};
   }
   if(action==='update-status')return updates.status({check:data.check===true});
-  if(action==='update-source')return updates.configure(data);
+  if(action==='update-source')throw new Error('更新来源由程序内置，不可修改');
   if(action==='update-start')return updates.start(data);
+  if(action==='update-reserve')return updates.reserve(data);
+  if(action==='update-cancel')return updates.cancel();
+  if(action==='update-logs')return updates.diagnostics();
   if(action==='update-rollback')return updates.rollback(data);
   if(action==='uninstall'){
    if(data.confirmed!==true||typeof data.purgeData!=='boolean')throw new Error('必须确认卸载及数据保留方式');
@@ -433,5 +437,5 @@ export function createSystemDriver({directory='/etc/vps-panel',coreDirectory='/u
   if(action==='stop-all'){for(const stream of streams)tripFuse(directory,stream);tripFuse(directory,'network');const result={};for(const stream of streams)result[stream]=await stop(stream);await actionNetworkDown(false);return{profiles:result};}
   throw new Error('不支持的系统操作');
  }
- return{action,status,stop,start,replaceTcp,networkUp,guardUp,syncPanelGuard,renewCertificates:async()=>{await assertMaintenanceIdle();return certificates.renew();}};
+ return{action,status,stop,start,replaceTcp,networkUp,guardUp,syncPanelGuard,maintainUpdates:()=>updates.tick(),renewCertificates:async()=>{await assertMaintenanceIdle();return certificates.renew();}};
 }

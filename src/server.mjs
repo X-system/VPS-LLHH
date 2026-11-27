@@ -1,5 +1,8 @@
-import{createNodeHealth,healthSettings,saveHealthSettings,publicProbeIPv4}from'./node-health.mjs';
+import{updateActive,updatePage,updatePageCss}from'./update-page.mjs';
+import{delegateNotification,notificationRelayStatus}from'./notification-relay.mjs';
+import{createNodeHealth,publicProbeIPv4}from'./node-health.mjs';
 import{networkInterfaces}from'node:os';
+import{isIP}from'node:net';
 import http from 'node:http';
 import https from 'node:https';
 import { readFileSync,writeFileSync,unlinkSync } from 'node:fs';
@@ -30,9 +33,11 @@ import{deleteUser,userUsage,deletedUsage,monthlyUserUsage}from'./user-ledger.mjs
 import{createOnboarding,resumeSetup}from'./onboarding.mjs';
 import{createPairing}from'./pairing.mjs';
 import{pairingPath}from'./pairing-transport.mjs';
+import{connectionStates}from'./line-state.mjs';
+import{notificationSettingsView,saveNotificationProfile,setNotificationEnabled,notificationTestMessage}from'./alert-settings.mjs';
 
 const publicDirectory = fileURLToPath(new URL('../public/', import.meta.url));
-const assets = new Map([['', ['index.html','text/html; charset=utf-8']],...['app.js','presence.mjs','ui-kit.mjs','ui-help.mjs','ui-pages.mjs','ui-config.mjs','ui-mobile.mjs','ui-monitor.mjs','ui-feedback.mjs','ui-health.mjs','ui-user-details.mjs','ui-onboarding.mjs','ui-pairing.mjs','ui-service-settings.mjs'].map(name=>[name,[name,'text/javascript; charset=utf-8']]),...['style.css','ui-style.css','ui-mobile.css','ui-monitor.css','ui-feedback.css','ui-health.css'].map(name=>[name,[name,'text/css; charset=utf-8']]),['login-background.png',['login-background.png','image/png']]]);
+const assets = new Map([['', ['index.html','text/html; charset=utf-8']],...['app.js','ui-alert-settings.mjs','ui-updates.mjs','presence.mjs','ui-kit.mjs','ui-help.mjs','ui-pages.mjs','ui-config.mjs','ui-mobile.mjs','ui-monitor.mjs','ui-feedback.mjs','ui-health.mjs','ui-user-details.mjs','ui-onboarding.mjs','ui-pairing.mjs','ui-service-settings.mjs'].map(name=>[name,[name,'text/javascript; charset=utf-8']]),...['style.css','ui-style.css','ui-mobile.css','ui-monitor.css','ui-feedback.css','ui-health.css'].map(name=>[name,[name,'text/css; charset=utf-8']]),['login-background.png',['login-background.png','image/png']]]);
 const DAY = 86400_000;
 const appVersion=JSON.parse(readFileSync(new URL('../package.json',import.meta.url),'utf8')).version;
 
@@ -45,6 +50,7 @@ export async function createApp(options = {}) {
   }
   if(!options.origin&&configuredOrigins.size)throw new Error('额外访问地址需要配置主管理地址');
   function requestOrigin(req){
+    if(options.allowIpAccess===false){let host;try{host=new URL('http://'+req.headers.host).hostname.replace(/^\[|\]$/g,'');}catch{return null;}if(isIP(host))return null;}
     const configured=configuredOrigins.get(req.headers.host);if(configured)return configured;
     if(!options.origin)return null;
     // A changed host IP must work without accepting arbitrary Host headers or DNS.
@@ -60,6 +66,7 @@ export async function createApp(options = {}) {
   const store = await openStore({ directory: options.directory || resolve('data'), password: options.password, clock: options.clock || Date.now });
   const loginLimiter = new RateLimiter({ clock: store.clock });
   const subscriptionLimiter=new RateLimiter({max:30,window:60000,capacity:1024,clock:store.clock});
+  const notificationTestLimiter=new RateLimiter({max:30,window:60000,capacity:16,clock:store.clock});
   indexSubscriptions(store);
   // Also bound password hashing work across source IPs.
   let pendingLogins = 0;
@@ -67,7 +74,7 @@ export async function createApp(options = {}) {
   const systemRequest=options.systemRequest;
   if(options.onboarding===true&&!store.get('onboarded')&&!store.get('onboarding')){store.set('onboarding',{version:2,step:'account',completed:[],draft:{}});store.set('settings',{...store.get('settings'),uiVersion:2});}
   const onboarding=createOnboarding({store,request:systemRequest,fetchImpl:options.fetchImpl,allowLocalBark:!!options.allowLocalBark,resolve:options.resolveDomain});
-  const pairing=createPairing({store,request:systemRequest,origin:options.origin,tls,transport:options.pairingTransport,allowLocal:!!options.allowLocalPairing,applyServices:options=>onboarding.apply({},options)});
+  const pairing=createPairing({store,request:systemRequest,origin:options.origin,tls,transport:options.pairingTransport,fetchImpl:options.fetchImpl,allowLocal:!!options.allowLocalPairing,applyServices:options=>onboarding.apply({},options)});
   const pairingLimiter=new RateLimiter({max:60,window:60000,capacity:1024,clock:store.clock});
   if (options.production && !tls) { store.close(); throw new Error('生产环境必须配置 HTTPS'); }
   const json = (res, status, payload, extra = {}) => {
@@ -89,6 +96,8 @@ export async function createApp(options = {}) {
     const config = store.get('settings');
     return { version:appVersion,serverName: config.serverName, role: config.role, setupComplete: !!store.get('onboarded'),onboarding:{active:onboarding.view().active},uiVersion:config.uiVersion||1,systemChangesEnabled:!!systemRequest,appearance:appearanceView(store) };
   }
+  let updateStatusCache=null,updateStatusAt=0,updateStatusPending=null;
+  async function updateView(){if(!systemRequest)return null;if(Date.now()-updateStatusAt<500)return updateStatusCache;if(updateStatusPending)return updateStatusPending;updateStatusPending=systemRequest('update-status').then(value=>{updateStatusCache=value;updateStatusAt=Date.now();return value;}).catch(()=>null).finally(()=>{updateStatusPending=null;});return updateStatusPending;}
   const handler = async (req, res) => {
     res.setHeader('Cache-Control','no-store');
     res.setHeader('X-Content-Type-Options','nosniff');
@@ -104,6 +113,13 @@ export async function createApp(options = {}) {
         if(req.method!=='POST'||options.origin&&!requestOrigin(req)||!pairingLimiter.allow(req.socket.remoteAddress))return json(res,404,{error:'Not found'});
         const match=/^Bearer ([A-Za-z0-9_-]{32,128})$/.exec(req.headers.authorization||'');if(!match)return json(res,404,{error:'Not found'});
         return json(res,200,await pairing.machine(match[1],await body(req,16384)));
+      }
+      const internalUpdateProbe=pathname===prefix+'api/meta'&&['127.0.0.1','::1','::ffff:127.0.0.1'].includes(req.socket.remoteAddress)&&req.headers['x-panel-update-probe']==='1';
+      if(!internalUpdateProbe&&pathname.startsWith(prefix)&&(pathname===prefix||pathname===prefix+'index.html'||pathname===prefix+'maintenance.css'||pathname===prefix+'api/meta'||!['GET','HEAD'].includes(req.method)||updateActive(updateStatusCache?.job))&&!pathname.endsWith('/api/updates')&&!pathname.endsWith('/api/updates/logs')){
+        const view=await updateView();if(updateActive(view?.job)){
+          if(req.method==='GET'&&(pathname===prefix||pathname===prefix+'index.html'||pathname===prefix+'maintenance.css')){const css=pathname.endsWith('maintenance.css');res.writeHead(css?200:503,{'Content-Type':css?'text/css; charset=utf-8':'text/html; charset=utf-8','Retry-After':'3'});return res.end(css?updatePageCss:updatePage(entrance.value));}
+          return json(res,503,{updating:true,error:'升级中，请等待'});
+        }
       }
       const subscriptionMatch=/^\/sub\/([A-Za-z0-9_-]{24,128})$/.exec(pathname);
       if(req.method==='GET'&&subscriptionMatch){
@@ -121,6 +137,7 @@ export async function createApp(options = {}) {
         if (!['127.0.0.1','localhost','[::1]'].includes(host)) throw new HttpError(421,'需要配置管理域名');
       } else if (!origin) throw new HttpError(421,'请求地址错误');
       if (req.headers.origin && req.headers.origin !== origin) throw new HttpError(403,'请求来源错误');
+      if(req.method==='GET'&&suffix==='maintenance.css'){res.writeHead(200,{'Content-Type':'text/css; charset=utf-8'});return res.end(updatePageCss);}
       if(req.method==='GET'&&suffix==='appearance.css'){
         const value=appearanceView(store),css=value.hasBackground?`.login-page{background-image:linear-gradient(90deg,#14294a44,#14294a11),url('${prefix}appearance/background.png')}`:'';
         res.writeHead(200,{'Content-Type':'text/css; charset=utf-8'});return res.end(css);
@@ -148,7 +165,7 @@ export async function createApp(options = {}) {
           throw new HttpError(429,'尝试过于频繁，请稍后重试');
         }
         const data = await body(req);
-        if (typeof data.username !== 'string' || typeof data.password !== 'string' || data.username.length > 80 || data.password.length > 256) throw new HttpError(400,'账户格式错误');
+        if (typeof data.username !== 'string' || typeof data.password !== 'string' || data.username.length > 80 || data.password.length===0) throw new HttpError(400,'账户格式错误');
         const admin = store.db.prepare('SELECT * FROM admin WHERE id=1').get();
         pendingLogins++;
         let valid;
@@ -186,6 +203,7 @@ export async function createApp(options = {}) {
         store.db.prepare('DELETE FROM sessions WHERE token=?').run(session.token);
         return json(res,200,{ ok:true },{'Set-Cookie':`vps_session=; Path=${prefix}; HttpOnly; SameSite=Strict; Max-Age=0${tls ? '; Secure':''}`});
       }
+      if(req.method==='POST'&&suffix==='api/entrance/rotate'){const data=await body(req);if(data.confirmed!==true)throw new HttpError(409,'请确认立即更换入口，当前登录将失效');if(updateActive((await updateView())?.job))throw new HttpError(409,'更新期间不能更换入口');const next=store.rotateEntrance();return json(res,200,{url:origin+'/'+next.value+'/'});}
       if (req.method === 'GET' && suffix === 'api/settings') return json(res,200,{ ...store.get('settings'), nextRotation: store.get('entrance').changed + store.get('settings').rotationDays*DAY });
       if(req.method==='GET'&&suffix==='api/appearance')return json(res,200,appearanceView(store));
       if(req.method==='PUT'&&suffix==='api/appearance')return json(res,200,configureAppearance(store,options.directory||resolve('data'),await body(req,4*1024*1024)));
@@ -208,9 +226,9 @@ export async function createApp(options = {}) {
       if (req.method === 'POST' && suffix === 'api/account') {
         const data = await body(req);
         const admin = store.db.prepare('SELECT * FROM admin WHERE id=1').get();
-        if (typeof data.currentPassword !== 'string' || data.currentPassword.length>256 || !await verifyPassword(data.currentPassword,admin.password)) throw new HttpError(403,'当前密码不正确');
+        if (typeof data.currentPassword !== 'string' || !await verifyPassword(data.currentPassword,admin.password)) throw new HttpError(403,'当前密码不正确');
         const username = text(data.username,'管理员名称',{ max:48 });
-        if (typeof data.password !== 'string' || data.password.length<12 || data.password.length>128) throw new HttpError(400,'新密码长度为12至128位');
+        if (typeof data.password !== 'string' || data.password.length===0) throw new HttpError(400,'新密码不能为空');
         const password = await hashPassword(data.password);
         store.transaction(()=>{store.db.prepare('UPDATE admin SET username=?,password=? WHERE id=1').run(username,password);store.db.exec('DELETE FROM sessions');store.audit('管理员凭证已修改');});
         return json(res,200,{ ok:true, loginRequired:true });
@@ -231,8 +249,7 @@ export async function createApp(options = {}) {
       }
       if (req.method === 'GET' && suffix === 'api/line-usage') return json(res,200,lineUsage(store));
       if(req.method==='GET'&&suffix==='api/health')return json(res,200,health.view());
-      if(req.method==='GET'&&suffix==='api/health/settings')return json(res,200,healthSettings(store));
-      if(req.method==='PUT'&&suffix==='api/health/settings'){const result=saveHealthSettings(store,await body(req));health.sample(true);return json(res,200,result);}
+      if(req.method==='GET'&&suffix==='api/notification-relay')return json(res,200,notificationRelayStatus(store));
       if(req.method==='GET'&&suffix==='api/history')return json(res,200,readHistory(store,new URL(req.url,'http://localhost').searchParams.get('range')||'5m'));
       if (req.method === 'GET' && suffix === 'api/integration') return json(res,200,nodeSnapshot(store));
       if (req.method === 'POST' && suffix === 'api/users') {
@@ -292,13 +309,15 @@ export async function createApp(options = {}) {
         store.set('runtime',{maintenance:true,emergencyStop:true});store.audit('请求卸载面板',{purgeData:data.purgeData});
         return json(res,202,await systemRequest('uninstall',{confirmed:true,purgeData:data.purgeData}));
       }
+      if(req.method==='GET'&&suffix==='api/updates/logs'){if(!systemRequest)throw new HttpError(501,'未连接系统管理器');return json(res,200,await systemRequest('update-logs'));}
       if(suffix==='api/updates'){
         if(!systemRequest)throw new HttpError(501,'更新功能需要Linux系统管理器');
         if(req.method==='GET')return json(res,200,await systemRequest('update-status'));
-        if(req.method==='PUT')return json(res,200,await systemRequest('update-source',await body(req)));
+        if(req.method==='PUT')throw new HttpError(405,'更新来源已内置，无需配置');
         if(req.method==='POST'){
-          const data=await body(req);if(!['check','update','rollback'].includes(data.action))throw new HttpError(400,'更新操作错误');
-          const result=await systemRequest(data.action==='check'?'update-status':data.action==='update'?'update-start':'update-rollback',{check:true,confirmed:data.confirmed});
+          const data=await body(req);if(!['check','update','rollback','reserve','cancel'].includes(data.action))throw new HttpError(400,'更新操作错误');
+          const result=await systemRequest(data.action==='check'?'update-status':data.action==='update'?'update-start':data.action==='reserve'?'update-reserve':data.action==='cancel'?'update-cancel':'update-rollback',{check:true,confirmed:data.confirmed,at:data.at});
+          updateStatusAt=0;if(data.action==='update')updateStatusCache={job:{step:'queued'}};
           store.audit('执行面板更新操作',{action:data.action});return json(res,data.action==='check'?200:202,result);
         }
       }
@@ -347,7 +366,7 @@ export async function createApp(options = {}) {
       if(['api/network','api/relay','api/services','api/system/inspect'].includes(suffix)){
         if(!systemRequest)throw new HttpError(501,'此实例未连接Linux系统管理器');
         if(req.method==='GET'&&suffix==='api/system/inspect')return json(res,200,await systemRequest('inspect'));
-        if(req.method==='GET'&&suffix==='api/services')return json(res,200,{...await systemRequest('status'),runtime:store.get('runtime'),autoStart:store.get('settings').autoStart,autoRepair:store.get('settings').autoRepair});
+        if(req.method==='GET'&&suffix==='api/services'){const status=await systemRequest('status');return json(res,200,{...status,connections:connectionStates(store,status),runtime:store.get('runtime'),autoStart:store.get('settings').autoStart,autoRepair:store.get('settings').autoRepair});}
         if(req.method==='PUT'&&suffix==='api/network'){const result=await saveNetwork(store,await body(req),systemRequest);health.sample(true);return json(res,200,result);}
         if(req.method==='PUT'&&suffix==='api/relay'){const result=await saveRelay(store,await body(req),systemRequest);health.sample(true);return json(res,200,result);}
         if(req.method==='POST'&&suffix==='api/services'){const input=await body(req);if(Object.hasOwn(input,'expectedAutomationToken'))throw new HttpError(400,'此字段仅供本机自动配置使用');const result=await serviceAction(store,input,systemRequest);health.sample(true);return json(res,200,result);}
@@ -358,6 +377,15 @@ export async function createApp(options = {}) {
         return json(res,200,await diagnostics(store,systemRequest));
       }
       if (req.method==='GET'&&suffix==='api/bark') return json(res,200,barkStatus(store));
+      if(req.method==='GET'&&suffix==='api/notification-settings')return json(res,200,notificationSettingsView(store));
+      if(req.method==='PUT'&&suffix==='api/notification-settings')return json(res,200,saveNotificationProfile(store,await body(req)));
+      if(req.method==='POST'&&suffix==='api/notification-control')return json(res,200,setNotificationEnabled(store,await body(req)));
+      if(req.method==='POST'&&suffix==='api/notification-test'){
+        if(!notificationTestLimiter.allow('manual-tests'))throw new HttpError(429,'测试发送过于频繁，请稍后再试');
+        const message=notificationTestMessage(store,await body(req)),encoded=store.get('bark');if(!encoded)throw new HttpError(409,'请先保存上方Bark推送链接');
+        try{await sendBark(JSON.parse(store.unseal(encoded)),message,{fetchImpl:options.fetchImpl});}catch{throw new HttpError(502,'测试通知未被Bark受理，请检查推送链接后重试');}
+        store.audit('手动发送通知项目测试');return json(res,200,{accepted:true});
+      }
       if(req.method==='GET'&&suffix==='api/alert-rules')return json(res,200,alertRules(store));
       if(req.method==='PUT'&&suffix==='api/alert-rules'){
         try{return json(res,200,configureAlertRules(store,await body(req)));}catch(error){if(error instanceof HttpError)throw error;throw new HttpError(400,error.message);}
@@ -417,10 +445,11 @@ export async function createApp(options = {}) {
     store.db.prepare('DELETE FROM audit WHERE at<?').run(store.clock()-config.logRetentionDays*DAY);
   }
   let dispatching=false;
+  function flushEvents(){if(dispatching)return;dispatching=true;return dispatchEvents(store,{fetchImpl:options.fetchImpl,origin:options.origin,...(options.notificationTransport?{delegate:event=>delegateNotification(store,event,{transport:options.notificationTransport,allowLocal:!!options.allowLocalPairing})}:{})}).catch(()=>{}).finally(()=>{dispatching=false;});}
   const timer=setInterval(()=>{
     try { maintenance(); } catch { /* Keep authentication fail-closed on maintenance errors. */ }
     onboarding.syncCertificate().catch(()=>{});
-    if(!dispatching) {dispatching=true;dispatchEvents(store,{fetchImpl:options.fetchImpl,origin:options.origin}).catch(()=>{}).finally(()=>{dispatching=false;});}
+    flushEvents();
   },30000);
   timer.unref();const history=createHistorySampler(store);const health=createNodeHealth({store,request:systemRequest,enabled:options.healthEnabled??(options.production===true&&!!systemRequest),...options.healthOptions});
   return { server,store,maintenance,history,health,onboarding,pairing, async close() { clearInterval(timer);history.close();await health.close(); await new Promise((resolve,reject)=>server.close(error=>error?reject(error):resolve())); while(dispatching)await new Promise(resolve=>setTimeout(resolve,20));await onboarding.wait();store.close(); } };
@@ -432,6 +461,7 @@ if (process.argv[1] && resolve(process.argv[1])===fileURLToPath(import.meta.url)
   const directory=resolve(process.env.VPS_DATA_DIR || 'data');
   const app=await createApp({ directory,production:process.env.NODE_ENV==='production',origin:process.env.VPS_ORIGIN,
     allowedOrigins:process.env.VPS_ALLOWED_ORIGINS?process.env.VPS_ALLOWED_ORIGINS.split(','):[],
+    allowIpAccess:process.env.VPS_ALLOW_IP_ACCESS!=='0',
     systemRequest:process.env.VPS_AGENT_ENABLED==='1'?agentRequest:undefined,
     tls:cert?{cert:readFileSync(cert),key:readFileSync(key)}:undefined });
   const host=process.env.VPS_HOST || '127.0.0.1', port=Number(process.env.VPS_PORT || 18443);

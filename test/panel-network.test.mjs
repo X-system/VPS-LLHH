@@ -79,3 +79,20 @@ test('启用正式域名证书保留原IP入口，改端口同步两个地址，
  const restored=await panel.status();assert.equal(restored.origin,'https://192.0.2.1:18446');assert.deepEqual(restored.allowedOrigins,['https://192.0.2.1:18446']);
  assert.equal(await readFile(join(f.root,'certs/panel-fullchain.pem'),'utf8'),'original-panel-fullchain.pem');
 });
+
+test('没有有效域名或解析不指向本机时，关闭IP访问不修改现有设置',async t=>{
+ const f=await fixture(t),before=await readFile(join(f.root,'web.env'),'utf8');let scheduled=false;
+ const panel=createPanelNetwork({...f.options,schedule:async()=>{scheduled=true;},resolveDomain:async()=>['192.0.2.99']});
+ assert.equal((await panel.status()).ipAccess,true);await assert.rejects(panel.configure({port:18443,ipAccess:false}),/证书/);
+ f.options.certificates.status=async()=>({certificateStaging:false,certificateDomain:'panel.example.test',notAfter:Date.now()+86400000});
+ await assert.rejects(panel.configure({port:18443,ipAccess:false}),/指向本机/);assert.equal(await readFile(join(f.root,'web.env'),'utf8'),before);assert.equal(scheduled,false);
+});
+
+test('关闭IP仅保留域名，跨实例持久化；失败回退恢复IP开关，重新勾选不切掉域名证书',{skip:process.platform==='win32'},async t=>{
+ const f=await fixture(t);f.options.certificates.status=async()=>({certificateStaging:false,certificateDomain:'panel.example.test',notAfter:Date.now()+86400000,fingerprint:'test-only'});
+ await mkdir(join(f.root,'certs/current'));for(const name of['fullchain.pem','privkey.pem'])await writeFile(join(f.root,'certs/current',name),'issued-fixture-'+name);
+ const options={...f.options,schedule:async()=>{},resolveDomain:async()=>['192.0.2.1']},panel=createPanelNetwork(options);
+ await panel.configure({port:18443,ipAccess:false});let current=await createPanelNetwork(options).status();assert.equal(current.ipAccess,false);assert.deepEqual(current.allowedOrigins,['https://panel.example.test:18443']);assert.equal(current.useDomainCertificate,true);
+ let checks=0;await executeRebind({root:f.root,firewall:f.firewall,restart:async()=>{},syncGuard:async()=>{},health:async()=>{if(++checks===1)throw Error('unhealthy');}});assert.equal((await panel.status()).ipAccess,true);
+ await panel.configure({port:18443,ipAccess:false});await f.options.release();await panel.configure({port:18443,ipAccess:true});current=await panel.status();assert.equal(current.ipAccess,true);assert.equal(current.useDomainCertificate,true);assert.deepEqual(current.allowedOrigins,['https://panel.example.test:18443','https://192.0.2.1:18443']);
+});

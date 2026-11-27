@@ -25,6 +25,12 @@ async function fixture(t,{clock,...appOptions}={}) {
   return {app,directory,origin,prefix,request,login,auth};
 }
 
+test('密码允许短密码、Unicode、空格及超过256字符，仅拒绝空值；更改后可用原文登录',async t=>{
+ const f=await fixture(t);await f.login();assert.equal((await f.auth('api/account',{method:'POST',data:{currentPassword:'test-password-for-local-only',username:'owner',password:''}})).status,400);assert.equal((await f.auth('api/account',{method:'POST',data:{currentPassword:'test-password-for-local-only',username:'owner',password:'1'}})).status,200);
+ const login=password=>f.request('api/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({username:'owner',password})});let response=await login('1');assert.equal(response.status,200);let cookie=response.headers.get('set-cookie').split(';')[0],csrf=(await response.json()).csrf;
+ const change=(currentPassword,password)=>f.request('api/account',{method:'POST',headers:{'Content-Type':'application/json',Cookie:cookie,'X-CSRF-Token':csrf},body:JSON.stringify({currentPassword,username:'owner',password})});const longPassword=' 空格密码🙂 '.repeat(80);assert.equal((await change('1',longPassword)).status,200);response=await login(longPassword);assert.equal(response.status,200);cookie=response.headers.get('set-cookie').split(';')[0];csrf=(await response.json()).csrf;assert.equal((await change(longPassword,'2')).status,200);assert.equal((await login('2')).status,200);
+});
+
 test('裸端口、猜测入口、旧入口404且不跳转；静态资源也受入口限制',async t=>{
   const f=await fixture(t);
   for(const path of ['/','/login','/api/meta','/app.js','/ui-style.css','/ui-kit.mjs','/ui-help.mjs','/ui-pages.mjs','/ui-config.mjs','/wrong/']){
@@ -109,6 +115,13 @@ test('本机公网IP变更立即允许新地址和实际监听端口，拒绝旧
  assert.equal(await request('11.0.0.22:'+port,{Origin:'http://11.0.0.22:'+port}),200);
 });
 
+test('关闭IP访问同时拒绝明确IP别名、本机动态IPv4、IPv6和伪造转发头，域名与本机域名自检仍可用',async t=>{
+ const domain='http://panel.example.test:18443',f=await fixture(t,{origin:domain,allowIpAccess:false,allowedOrigins:['http://192.0.2.1:18443','http://[2001:db8::1]:18443'],networkInterfaces:()=>({eth0:[{family:'IPv4',internal:false,address:'11.0.0.2'}]})});
+ const request=(host,path='api/meta')=>new Promise((resolve,reject)=>{const req=httpRequest(f.origin+f.prefix+path,{headers:{Host:host,'X-Forwarded-Host':new URL(domain).host}},res=>{res.resume();res.on('end',()=>resolve(res.statusCode));});req.on('error',reject);req.end();});
+ assert.equal(await request(new URL(domain).host),200);
+ for(const host of['192.0.2.1:18443','11.0.0.2:'+f.app.server.address().port,'[2001:db8::1]:18443','127.0.0.1:'+f.app.server.address().port])for(const path of['api/meta','app.js','api/settings',''])assert.equal(await request(host,path),421);
+});
+
 test('安全入口更新周期不可关闭、不可永久、自定义入口不可写；设置持久化',async t=>{
   const f=await fixture(t);await f.login();
   for(const value of [0,-1,181,null,'永久'])assert.equal((await f.auth('api/settings',{method:'PATCH',data:{rotationDays:value}})).status,400);
@@ -185,7 +198,7 @@ test('生产HTTPS缺失时拒绝启动；系统功能不返回成功占位',asyn
 
  test('历史监控接口需要登录、校验范围且不制造空白时段记录',async t=>{const f=await fixture(t);assert.equal((await f.request('api/history')).status,401);await f.login();const response=await f.auth('api/history?range=24h');assert.equal(response.status,200);const data=await response.json();assert.deepEqual(data.points,[]);assert.equal(data.range,'24h');assert.equal(data.fresh,false);assert.equal((await f.auth('api/history?range=7d')).status,400);});
 
-test('服务健康接口只读、需要认证；设置只接受启用开关',async t=>{const f=await fixture(t);assert.equal((await f.request('api/health')).status,401);await f.login();const response=await f.auth('api/health');assert.equal(response.status,200);const health=await response.json();assert.equal(health.state,'grey');assert.equal(health.rows.find(r=>r.id==='controller').state,'grey');assert.equal(health.readOnly,true);assert.equal((await f.auth('api/health/settings',{method:'PUT',data:{probeEnabled:false,target:'127.0.0.1'}})).status,400);assert.equal((await f.auth('api/health/settings',{method:'PUT',data:{probeEnabled:false}})).status,200);assert.equal((await(await f.auth('api/health/settings')).json()).probeEnabled,false);});
+test('健康接口只读且需认证，已移除TCP检测设置接口，通知对端不泄露密钥',async t=>{const f=await fixture(t);assert.equal((await f.request('api/health')).status,401);await f.login();const response=await f.auth('api/health');assert.equal(response.status,200);const health=await response.json();assert.equal(health.state,'grey');assert.equal(health.readOnly,true);assert.ok(!health.rows.some(r=>r.id.startsWith('probe-')));assert.equal((await f.auth('api/health/settings')).status,404);const status=await(await f.auth('api/notification-relay')).json();assert.deepEqual(status.peers,[]);});
 
 test('TCP加速管理需要登录与CSRF，三选一校验，不接收任意命令',async t=>{
  const calls=[],f=await fixture(t,{systemRequest:async(action,data)=>{calls.push({action,data});return{mode:data?.mode||'off',effective:'cubic',bbrxSupported:true};}});
@@ -196,3 +209,5 @@ test('TCP加速管理需要登录与CSRF，三选一校验，不接收任意命�
  for(const mode of['off','bbr','bbrx'])assert.equal((await f.auth('api/tcp-acceleration',{method:'PUT',data:{mode}})).status,202);
  assert.deepEqual(calls.filter(v=>v.action==='tcp-acceleration-set').map(v=>v.data.mode),['off','bbr','bbrx']);
 });
+
+test('立即更换入口需登录与确认，生成随机新入口并注销旧会话',async t=>{const f=await fixture(t);assert.equal((await f.request('api/entrance/rotate',{method:'POST',headers:{'Content-Type':'application/json'},body:'{"confirmed":true}'})).status,401);await f.login();const before=f.app.store.get('entrance').value;assert.equal((await f.auth('api/entrance/rotate',{method:'POST',data:{confirmed:false}})).status,409);assert.equal(f.app.store.get('entrance').value,before);const response=await f.auth('api/entrance/rotate',{method:'POST',data:{confirmed:true}});assert.equal(response.status,200);const result=await response.json(),after=f.app.store.get('entrance').value;assert.notEqual(after,before);assert.equal(after.length,20);assert.ok(result.url.endsWith('/'+after+'/'));assert.equal(f.app.store.db.prepare('SELECT COUNT(*)AS n FROM sessions').get().n,0);assert.equal((await f.request('api/meta')).status,404);});

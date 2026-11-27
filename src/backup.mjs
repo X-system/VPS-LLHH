@@ -1,4 +1,3 @@
-import{healthSettings,validateHealthSettings}from'./node-health.mjs';
 import { randomBytes,scryptSync,createCipheriv,createDecipheriv,randomUUID } from 'node:crypto';
 import { HttpError } from './validation.mjs';
 import { settings as validateSettings,user as validateUser } from './validation.mjs';
@@ -9,6 +8,7 @@ import { alertRules,validateAlertRules } from './metrics.mjs';
 import{storedUsers,restoreLineRows,ledgerSnapshot,restoreLedger}from'./user-storage.mjs';
 import{saveLines}from'./line-permissions.mjs';
 import{subscriptionSettings,saveSubscriptionSettings}from'./line-catalog.mjs';
+import{notificationProfiles,validateNotificationProfiles}from'./alert-settings.mjs';
 
 const MAGIC='vps-panel-backup';
 const UUID=/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/;
@@ -44,14 +44,14 @@ function prepareHistory(data,users){
  return{totals,presence,userDays,deletedDays};
 }
 function derive(password,salt) {
-  if(typeof password!=='string'||password.length<12||password.length>128)throw new HttpError(400,'备份密码长度为12至128位');
+  if(typeof password!=='string'||password.length===0)throw new HttpError(400,'备份密码不能为空');
   return scryptSync(password,salt,32,{N:32768,r:8,p:1,maxmem:64*1024*1024});
 }
 export function exportBackup(store,{password,full=false}={}) {
   const settings=store.get('settings');
   const users=storedUsers(store).map(user=>exportUser(store,user,full));
   const data={format:MAGIC,version:2,kind:full?'full':'config',created:store.clock(),settings,users};
-  data.healthMonitor={probeEnabled:healthSettings(store).probeEnabled};data.appearance=exportAppearance(store);data.alertRules=alertRules(store);
+  data.appearance=exportAppearance(store);data.alertRules=alertRules(store);data.notificationProfiles=notificationProfiles(store);
   data.subscription=subscriptionSettings(store);
   const archived=store.get('role-archives');if(archived){data.roles={};for(const[role,snapshot]of Object.entries(JSON.parse(store.unseal(archived))))data.roles[role]={users:snapshot.users.map(user=>exportUser(store,user,full)),...(full?{totals:snapshot.totals,presence:snapshot.presence||[],userDays:snapshot.userDays||[],deletedDays:snapshot.deletedDays||[]}:{} )};}
   if(full) {
@@ -108,8 +108,8 @@ export function importBackup(store,input,{password,mode='clone',confirmed=false,
   if(data.bark&&data.kind==='full')bark=validateBark(data.bark,{allowLocalHttp});
   let certificateSettings;
   if(data.certificateSettings&&data.kind==='full')certificateSettings=validateCertificateSettings(data.certificateSettings);
-  const healthMonitor=data.healthMonitor===undefined?null:validateHealthSettings(data.healthMonitor);
   const appearance=data.appearance?validateAppearance(data.appearance):null,rules=data.alertRules?validateAlertRules(data.alertRules):null;
+  const notifications=data.notificationProfiles?validateNotificationProfiles(data.notificationProfiles):null;
   const{totals,presence,userDays,deletedDays}=prepareHistory(data,users),roleArchives={};
   const naming=data.subscription?saveSubscriptionSettings({get:store.get,set:()=>{},audit:()=>{}},data.subscription):null;
   if(data.roles!==undefined){
@@ -136,7 +136,8 @@ export function importBackup(store,input,{password,mode='clone',confirmed=false,
     store.set('runtime',{maintenance:true,emergencyStop:false});
     store.set('onboarded',true);
     if(appearance)configureAppearance(store,store.directory,appearance);
-    if(rules)store.set('alert-rules',rules);if(healthMonitor)store.set('health-settings',healthMonitor);
+    if(rules)store.set('alert-rules',rules);
+    store.set('notification-profiles',notifications);if(notifications)store.set('alert-rules',notifications[notifications.active].rules);
     if(bark)store.set('bark',store.seal(JSON.stringify(bark)));
     store.set('certificate-settings',certificateSettings?store.seal(JSON.stringify(certificateSettings)):null);
     store.set('role-archives',Object.keys(roleArchives).length?store.seal(JSON.stringify(roleArchives)):null);

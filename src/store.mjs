@@ -90,6 +90,7 @@ export async function openStore({ directory, password, clock = Date.now }) {
       return { up: deltaUp, down: deltaDown };
     });
   }
+  db.prepare("DELETE FROM config WHERE key IN ('health-settings','health-probes')").run();
   return { directory,db, get, set, audit, transaction, rotateEntrance, applyTraffic, clock, bootstrapPassword,
     seal: value => encrypt(value, key), unseal: value => decrypt(value, key),
     session(raw) { return raw ? db.prepare('SELECT * FROM sessions WHERE token=? AND expires>?').get(digest(raw), clock()) : undefined; },

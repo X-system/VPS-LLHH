@@ -10,13 +10,13 @@ import{createUpdateManager,releaseAsset,newerVersion}from'../src/updates.mjs';
 const runner=promisify(execFile);
 test('更新只接受指定GitHub正式Release的正确发布包、大小与摘要，不能降级或改下载主机',async t=>{
  const directory=mkdtempSync(join(tmpdir(),'vps-update-test-'));t.after(()=>rmSync(directory,{recursive:true,force:true}));
- const release={tag_name:'relay-v0.2.1',assets:[{name:'vps-panel-v0.2.1.tar.gz',size:100,digest:'sha256:'+'a'.repeat(64),browser_download_url:'https://github.com/example/panel/releases/download/relay-v0.2.1/vps-panel-v0.2.1.tar.gz'}]};
- assert.equal(releaseAsset('example/panel',release).version,'0.2.1');
+ const release={tag_name:'relay-v0.4.0',assets:[{name:'vps-panel-v0.4.0.tar.gz',size:100,digest:'sha256:'+'a'.repeat(64),browser_download_url:'https://github.com/example/panel/releases/download/relay-v0.4.0/vps-panel-v0.4.0.tar.gz'}]};
+ assert.equal(releaseAsset('example/panel',release).version,'0.4.0');
  assert.throws(()=>releaseAsset('example/panel',{...release,prerelease:true}));
  assert.throws(()=>releaseAsset('example/panel',{...release,assets:[{...release.assets[0],browser_download_url:'https://evil.example/file'}]}));
  assert.equal(newerVersion('0.1.0','0.2.0'),false);
- const calls=[],manager=createUpdateManager({directory,fetchImpl:async url=>{assert.equal(url,'https://api.github.com/repos/example/panel/releases?per_page=100&page=1');return{ok:true,json:async()=>[release]};},schedule:async(...args)=>calls.push(args)});
- await manager.configure({repository:'example/panel'});await assert.rejects(manager.start({confirmed:false}));
+ const calls=[],manager=createUpdateManager({directory,sourceRepository:'example/panel',fetchImpl:async url=>{assert.equal(url,'https://api.github.com/repos/example/panel/releases?per_page=100&page=1');return{ok:true,json:async()=>[release]};},schedule:async(...args)=>calls.push(args)});
+await assert.rejects(manager.start({confirmed:false}));
  await manager.start({confirmed:true});assert.equal(calls.length,1);
  const request=JSON.parse(readFileSync(join(directory,'update-request.json')));assert.equal(request.sha256,'a'.repeat(64));
 });

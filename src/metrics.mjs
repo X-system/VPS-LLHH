@@ -14,15 +14,16 @@ export function validateAlertRules(input){
  const seen=new Set();
  const hostRules=input.hostRules.map(value=>{
   const base=defaultRules.find(rule=>rule.id===value.id);if(!base||seen.has(value.id)||typeof value.enabled!=='boolean')throw new Error('告警规则标识错误');seen.add(value.id);
-  for(const[key,min,max]of[['threshold',1,100],['windowSeconds',10,3600],['cooldownSeconds',60,86400]])if(!Number.isInteger(value[key])||value[key]<min||value[key]>max)throw new Error('告警阈值或时间范围错误');
-  return{...base,enabled:value.enabled,threshold:value.threshold,windowSeconds:value.windowSeconds,cooldownSeconds:value.cooldownSeconds};
+  const unit=base.capacity&&value.unit==='mbps'?'mbps':'percent';
+  for(const[key,min,max]of[['threshold',1,unit==='mbps'?1000000:100],['windowSeconds',10,3600],['cooldownSeconds',60,86400]])if(!Number.isInteger(value[key])||value[key]<min||value[key]>max)throw new Error('告警阈值或时间范围错误');
+  return{...base,enabled:value.enabled,...(base.capacity?{unit}:{}),threshold:value.threshold,windowSeconds:value.windowSeconds,cooldownSeconds:value.cooldownSeconds};
  });
  const userRules={};for(const[key,min,max]of[['spikePercent',1,100],['spikeSeconds',5,3600],['bandwidthPercent',1,100],['bandwidthSeconds',5,3600],['cooldownSeconds',60,86400]]){
   const value=input.userRules[key];if(!Number.isInteger(value)||value<min||value>max)throw new Error('用户告警阈值或时间错误');userRules[key]=value;
  }
  return{hostRules,userRules};
 }
-export function configureAlertRules(store,input){const result=validateAlertRules(input);store.set('alert-rules',result);store.audit('更新告警阈值');return result;}
+export function configureAlertRules(store,input){const result=validateAlertRules(input);store.transaction(()=>{store.set('alert-rules',result);const profiles=store.get('notification-profiles');if(profiles){profiles[profiles.active].rules=result;store.set('notification-profiles',profiles);}store.set('metric-samples',[]);store.set('metric-rule-states',{});store.set('user-alert-states',{});store.audit('更新告警阈值');});return result;}
 
 export function evaluateRules(store,sample,rules=alertRules(store).hostRules){
   const now=store.clock(),retained=store.get('metric-samples')||[];
@@ -45,16 +46,18 @@ export function evaluateRules(store,sample,rules=alertRules(store).hostRules){
       const span=history[index].at-Math.max(start,history[index-1].at);average+=history[index-1][rule.metric]*span;duration+=span;
     }
     if(!duration)continue;average/=duration;
-    const threshold=rule.capacity?store.get('settings').bandwidthMbps*rule.threshold/100:rule.threshold;
-    const exceeded=average>=threshold;
+    const threshold=rule.capacity&&rule.unit!=='mbps'?store.get('settings').bandwidthMbps*rule.threshold/100:rule.threshold;
+    const exceeded=history.every(item=>item[rule.metric]>=threshold);
     const old=states[rule.id];
     if(exceeded){
-      const body=`${rule.metric} 在${rule.windowSeconds/60}分钟窗口平均为${average.toFixed(1)}，阈值${threshold.toFixed(1)}。`;
-      const id=enqueueEvent(store,rule.type||rule.id,{body},{key:rule.id,cooldown:rule.cooldownSeconds*1000});
+      const names={cpuPercent:'CPU占用',memoryPercent:'内存占用',diskPercent:'磁盘占用',uploadMbps:'上传带宽',downloadMbps:'下载带宽'},unit=rule.capacity?'Mbps':'%',minutes=Number((rule.windowSeconds/60).toFixed(2));
+      const body=`当前${names[rule.metric]}持续达到${threshold.toFixed(1)}${unit}，且已满${minutes}分钟，当前约${sample[rule.metric].toFixed(1)}${unit}，请立即检查。`;
+      const id=enqueueEvent(store,rule.type||rule.id,{body,threshold:threshold.toFixed(1)+unit,minutes,current:sample[rule.metric].toFixed(1)+unit},{key:rule.id,cooldown:rule.cooldownSeconds*1000});
       if(id)alerts.push(id);
       states[rule.id]={active:true,last:now};
     }else if(old?.active){
-      const id=enqueueEvent(store,'repair.succeeded',{body:`${rule.metric} 已恢复至阈值以下。`},{key:rule.id+'.recovered',cooldown:rule.cooldownSeconds*1000});
+      const names={cpuPercent:'CPU占用',memoryPercent:'内存占用',diskPercent:'磁盘占用',uploadMbps:'上传带宽',downloadMbps:'下载带宽'};
+      const id=enqueueEvent(store,'repair.succeeded',{body:`${names[rule.metric]}已恢复至报警阈值以下。`},{key:rule.id+'.recovered',cooldown:rule.cooldownSeconds*1000});
       if(id)alerts.push(id);states[rule.id]={active:false,last:now};
     }
   }
@@ -67,13 +70,13 @@ export function evaluateUserAlerts(store){
  for(const id of Object.keys(states))if(!known.has(id))delete states[id];
  for(const user of users){
   if(!user.enabled){delete states[user.id];continue;}
-  if(user.quota>0&&user.used>=user.quota*.9)enqueueEvent(store,'user.quota',{body:`用户“${user.name}”已使用额度的${Math.floor(user.used/user.quota*100)}%。`},{key:'user.quota.'+user.id,cooldown:rules.cooldownSeconds*1000});
+  if(user.quota>0&&user.used>=user.quota*.9)enqueueEvent(store,'user.quota',{body:`用户“${user.name}”已使用流量额度的${Math.floor(user.used/user.quota*100)}%。`,user:user.name,current:Math.floor(user.used/user.quota*100)+'%'},{key:'user.quota.'+user.id,cooldown:rules.cooldownSeconds*1000});
   const values=Object.entries(live[user.id]||{}).filter(([stream,value])=>statuses&&now-statuses.at<=20000&&statuses.profiles[stream]?.active&&store.get('collector-health.'+stream)?.ok&&now-value.at<=20000&&value.up!==null&&value.down!==null).map(([,value])=>value);
   if(!values.length){delete states[user.id];continue;}
   const rate=Math.max(values.reduce((sum,value)=>sum+value.up,0),values.reduce((sum,value)=>sum+value.down,0))*8/1e6,capacity=store.get('settings').bandwidthMbps;
   const state=states[user.id]||{};if(!state.at||now-state.at>20000){delete state.spikeSince;delete state.bandwidthSince;}
   for(const[metric,type,percent,seconds]of[['spike','user.spike',rules.spikePercent,rules.spikeSeconds],['bandwidth','user.bandwidth',rules.bandwidthPercent,rules.bandwidthSeconds]]){
-   const key=metric+'Since';if(rate>=capacity*percent/100){state[key]??=now;if(now-state[key]>=seconds*1000)enqueueEvent(store,type,{body:`用户“${user.name}”持续占用较高带宽，当前约${rate.toFixed(1)}Mbps。`},{key:type+'.'+user.id,cooldown:rules.cooldownSeconds*1000});}else delete state[key];
+   const key=metric+'Since';if(rate>=capacity*percent/100){state[key]??=now;if(now-state[key]>=seconds*1000)enqueueEvent(store,type,{body:`用户“${user.name}”持续占用带宽${Number((seconds/60).toFixed(2))}分钟，当前约${rate.toFixed(1)}Mbps，请立即检查。`,user:user.name,threshold:(capacity*percent/100).toFixed(1)+'Mbps',minutes:Number((seconds/60).toFixed(2)),current:rate.toFixed(1)+'Mbps'},{key:type+'.'+user.id,cooldown:rules.cooldownSeconds*1000});}else delete state[key];
   }
   state.at=now;states[user.id]=state;
  }

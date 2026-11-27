@@ -1,5 +1,7 @@
+import{delegateNotification,relayEventTypes}from'./notification-relay.mjs';
 import { createCipheriv,randomBytes,randomUUID } from 'node:crypto';
 import { HttpError } from './validation.mjs';
+import{renderNotification}from'./alert-settings.mjs';
 
 export const eventTypes = {
   'entrance.rotated':'安全入口已更新','panel.changed':'管理连接已变更','login.failures':'登录失败过于频繁','user.quota':'用户流量接近额度',
@@ -7,7 +9,8 @@ export const eventTypes = {
   'host.cpu':'CPU 持续高占用','host.memory':'内存持续高占用','host.disk':'磁盘空间不足',
   'service.failed':'服务异常','tunnel.failed':'隧道异常','certificate.failed':'证书续签失败',
   'repair.started':'正在尝试修复','repair.succeeded':'修复成功','repair.failed':'自动修复失败',
-  'maintenance.failed':'维护操作失败','bark.test':'推送通道测试'
+  'maintenance.failed':'维护操作失败','service.started':'线路已启动','service.stopped':'线路已停止','service.recovered':'线路已恢复',
+  'upstream.disconnected':'上游服务器断开','upstream.connected':'上游服务器恢复连接','bark.test':'推送通道测试'
 };
 export function parseBarkLink(value){
   if(typeof value!=='string'||value.trim().length>4096)throw new HttpError(400,'请粘贴Bark提供的完整推送链接');
@@ -57,6 +60,7 @@ export function configureBark(store,input,options={}) {
   const current=store.get('bark');
   const prior=current?JSON.parse(store.unseal(current)):{};
   const next=validateBark({...prior,...input,deviceKey:input.deviceKey||prior.deviceKey,encryptionKey:input.encryptionKey===undefined?prior.encryptionKey:input.encryptionKey},options);
+  const profiles=store.get('notification-profiles');if(profiles)next.events=profiles[profiles.active].events;
   store.set('bark',store.seal(JSON.stringify(next)));store.audit('更新 Bark 配置');
   return barkStatus(store);
 }
@@ -68,6 +72,7 @@ export function barkStatus(store) {
 }
 export function enqueueEvent(store,type,data,{cooldown=30*60000,key=type}={}) {
   if (!Object.hasOwn(eventTypes,type)) throw new Error('未知事件类型');
+  if(store.get('notification-profiles')?.enabled===false)return null;
   const encoded=store.get('bark');
   const config=encoded?JSON.parse(store.unseal(encoded)):null;
   if (config && !config.events.includes(type) && type!=='bark.test') return null;
@@ -84,23 +89,33 @@ export function enqueueEvent(store,type,data,{cooldown=30*60000,key=type}={}) {
     store.set('event-cooldowns',Object.fromEntries(recent));return id;
   });
 }
-export async function dispatchEvents(store,{fetchImpl=fetch,origin,max=5}={}) {
+export async function dispatchEvents(store,{fetchImpl=fetch,origin,max=5,delegate=event=>delegateNotification(store,event)}={}) {
+  if(store.get('notification-profiles')?.enabled===false)return;
   const encoded=store.get('bark');if(!encoded)return;
   const config=JSON.parse(store.unseal(encoded));
   const rows=store.db.prepare("SELECT * FROM events WHERE status='pending' AND attempts<5 AND next_at<=? ORDER BY at LIMIT ?").all(store.clock(),max);
   for (const row of rows) {
+    if(store.get('notification-profiles')?.enabled===false)break;
     if (!config.events.includes(row.type) && row.type!=='bark.test') {store.db.prepare("UPDATE events SET status='disabled' WHERE id=?").run(row.id);continue;}
     const data=JSON.parse(store.unseal(row.payload));
     const sensitive=row.type==='entrance.rotated'||row.type==='panel.changed'&&typeof data.url==='string';
     if(row.type==='entrance.rotated'&&data.entrance!==store.get('entrance').value||row.type==='panel.changed'&&data.origin&&origin&&data.origin!==origin){store.db.prepare("UPDATE events SET status='superseded' WHERE id=?").run(row.id);continue;}
     const includeAddress=sensitive&&!!config.encryptionKey&&!!origin;
     const name=store.get('settings').serverName;
-    const message={title:`【${name}】${eventTypes[row.type]}`,body:sensitive?(includeAddress?'管理入口已更新，点击打开新入口。':'管理入口已更新，请通过SSH应急菜单查看当前地址。'):String(data.body||'请登录面板查看详情。'),group:name,sensitive:includeAddress,
-      ...(includeAddress?{url:row.type==='entrance.rotated'?new URL('/'+data.entrance+'/',origin).href:new URL('/'+store.get('entrance').value+'/',data.origin).href}:{})};
+    const message=renderNotification(store,row.type,data,{title:`【${name}】异常提醒`,body:sensitive?(includeAddress?'管理入口已更新，点击打开新入口。':'管理入口已更新，请通过SSH应急菜单查看当前地址。'):String(data.body||'请登录面板查看详情。'),group:name,sensitive:includeAddress,
+      ...(includeAddress?{url:row.type==='entrance.rotated'?new URL('/'+data.entrance+'/',origin).href:new URL('/'+store.get('entrance').value+'/',data.origin).href}:{})});
     try {
       await sendBark(config,message,{fetchImpl});
       store.db.prepare("UPDATE events SET status='accepted',attempts=attempts+1 WHERE id=?").run(row.id);
     } catch {
+      if(store.get('notification-profiles')?.enabled===false){store.db.prepare("UPDATE events SET status='disabled' WHERE id=?").run(row.id);continue;}
+      if(relayEventTypes.has(row.type)){
+        let accepted=false;try{accepted=(await delegate({eventId:row.id,type:row.type,request:barkPayload(config,message)}))?.accepted===true;}catch{}
+        if(!accepted&&store.get('notification-profiles')?.enabled===false){store.db.prepare("UPDATE events SET status='disabled' WHERE id=?").run(row.id);continue;}
+        store.db.prepare("UPDATE events SET status=?,attempts=attempts+1 WHERE id=?").run(accepted?'accepted':'failed',row.id);
+        if(!accepted)store.audit('故障告警直发与全部代发均失败，仅保留记录',{eventId:row.id,type:row.type});
+        continue;
+      }
       const attempts=row.attempts+1;
       store.db.prepare('UPDATE events SET attempts=?,status=?,next_at=? WHERE id=?').run(attempts,attempts>=5?'failed':'pending',store.clock()+[60000,300000,1800000,3600000,3600000][attempts-1],row.id);
       store.audit('Bark 推送未受理',{type:row.type,attempts});

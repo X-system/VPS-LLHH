@@ -18,6 +18,8 @@ if(action==='address'||action==='status'){
    console.log(JSON.stringify({serverName:get('settings').serverName,role:get('settings').role,runtime:get('runtime'),system,systemAgentAvailable:!!system},null,2));
   }
   db.close();
+}else if(action==='enable-ip-access'){
+ const status=await agentRequest('panel-status');await agentRequest('panel-configure',{port:status.port,ipAccess:true,useDomainCertificate:false});console.log('已提交恢复IP访问，网页将短暂重启；管理端口和安全入口保持不变。请通过SSH查看当前入口。');
 }else if(action==='reset-entry'||action==='reset-password'){
   const store=await openStore({directory});
   try{

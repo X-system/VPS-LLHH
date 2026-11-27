@@ -16,7 +16,7 @@ export function createAgent({driver}){
    const payload=JSON.parse(Buffer.concat(chunks));
    if(typeof payload.action!=='string'||!/^[a-z][a-z0-9-]{0,39}$/.test(payload.action)||!payload.data||typeof payload.data!=='object'||Array.isArray(payload.data))return answer(400,{error:'系统请求格式错误'});
    const emergency=['stop','stop-all','network-down','emergency-stop'].includes(payload.action);
-   const readonly=['status','inspect','logs','certificate-status','panel-status','tcp-acceleration-status'].includes(payload.action)||payload.action==='update-status'&&payload.data.check!==true;
+   const readonly=['status','inspect','logs','certificate-status','panel-status','tcp-acceleration-status','update-logs'].includes(payload.action)||payload.action==='update-status'&&payload.data.check!==true;
    if(!emergency&&!readonly&&(busy||urgent))return answer(409,{error:'系统正在执行上一项操作，请稍后重试'});
    if(readonly&&readers>=4)return answer(429,{error:'状态请求较多，请稍后重试'});
    if(emergency)urgent++;else if(readonly)readers++;else busy=true;
@@ -37,6 +37,7 @@ if(process.argv[1]&&resolve(process.argv[1])===fileURLToPath(import.meta.url)){
  try{await lstat(socket);throw new Error('管理器套接字已存在，请通过systemd重启，避免覆盖其他进程');}catch(error){if(error.code!=='ENOENT')throw error;}
  const driver=createSystemDriver(),agent=createAgent({driver});
  const timer=setInterval(()=>driver.renewCertificates().catch(()=>{}),3600000);timer.unref();
- agent.server.listen(socket,async()=>{await chmod(socket,0o660);console.log('本机系统管理器已启动');driver.renewCertificates().catch(()=>{});});
+ const updateTimer=setInterval(()=>driver.maintainUpdates().catch(()=>{}),30000);updateTimer.unref();
+ agent.server.listen(socket,async()=>{await chmod(socket,0o660);console.log('本机系统管理器已启动');driver.renewCertificates().catch(()=>{});driver.maintainUpdates().catch(()=>{});});
  for(const signal of['SIGINT','SIGTERM'])process.once(signal,()=>agent.close().then(()=>process.exit(0)));
 }

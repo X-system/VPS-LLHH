@@ -32,7 +32,7 @@ export function createOnboarding({store,request,fetchImpl=fetch,allowLocalBark=f
   if(!input||typeof input!=='object'||Array.isArray(input)||input.step!==state.step)throw new HttpError(409,'引导进度已更新，请重新获取当前步骤');
   if(input.back===true){const order=steps(),index=order.indexOf(state.step);if(index<=1)throw new HttpError(409,'账户已设置，请在完成引导后到面板设置修改');const target=order[index-1];store.set('onboarding',{...state,step:target,completed:state.completed.filter(id=>order.indexOf(id)<index-1),job:null});return view();}
   if(state.step==='account'){
-   const username=text(input.username,'管理员名称',{max:48});if(typeof input.password!=='string'||input.password.length<12||input.password.length>128)throw new HttpError(400,'密码长度为12至128位');
+   const username=text(input.username,'管理员名称',{max:48});if(typeof input.password!=='string'||input.password.length===0)throw new HttpError(400,'密码不能为空');
    const password=await hashPassword(input.password),raw=token(),csrf=token();
    store.transaction(()=>{store.db.prepare('UPDATE admin SET username=?,password=? WHERE id=1').run(username,password);store.db.exec('DELETE FROM sessions');store.set('bootstrap-access',null);store.db.prepare('INSERT INTO sessions VALUES(?,?,?)').run(digest(raw),csrf,store.clock()+10*3600000);move(state);store.audit('完成引导账户设置');});
    return{...view(),session:{raw,csrf}};

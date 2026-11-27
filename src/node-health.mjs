@@ -1,30 +1,17 @@
 import net from'node:net';
-import{lookup}from'node:dns/promises';
 import{performance}from'node:perf_hooks';
-import{HttpError}from'./validation.mjs';
-export const probeTargets=Object.freeze([{id:'baidu',name:'百度',host:'www.baidu.com'},{id:'qq',name:'腾讯',host:'www.qq.com'},{id:'bilibili',name:'哔哩哔哩',host:'www.bilibili.com'}].map(Object.freeze));
 const fresh=(record,now,ttl=25000)=>!!record&&Number.isFinite(record.at)&&record.at<=now&&now-record.at<=ttl;
-export function healthSettings(store){return{probeEnabled:store.get('health-settings')?.probeEnabled!==false,probeIntervalSeconds:60,targets:probeTargets.map(t=>({name:t.name,host:t.host,port:443}))};}
-export function validateHealthSettings(input){if(!input||typeof input.probeEnabled!=='boolean'||Object.keys(input).some(k=>k!=='probeEnabled'))throw new HttpError(400,'检测设置不正确');return{probeEnabled:input.probeEnabled};}
-export function saveHealthSettings(store,input){const checked=validateHealthSettings(input);store.set('health-settings',checked);store.audit('修改健康检测设置',{probeEnabled:input.probeEnabled});return healthSettings(store);}
 export function publicProbeIPv4(address){if(net.isIP(address)!==4)return false;const[a,b]=address.split('.').map(Number);return a!==0&&a!==10&&a!==127&&a<224&&!(a===100&&b>=64&&b<=127)&&!(a===169&&b===254)&&!(a===172&&b>=16&&b<=31)&&!(a===192&&[0,168].includes(b))&&!(a===198&&[18,19].includes(b));}
 export function tcpConnect(address,port,{timeoutMs=2500,signal}={}){return new Promise(resolve=>{const started=performance.now();let done=false;const socket=net.createConnection({host:address,port});const finish=ok=>{if(done)return;done=true;clearTimeout(timer);signal?.removeEventListener('abort',abort);socket.destroy();resolve({ok,ms:ok?Math.round((performance.now()-started)*10)/10:null});};const abort=()=>finish(false),timer=setTimeout(abort,timeoutMs);socket.once('connect',()=>finish(true));socket.once('error',()=>finish(false));if(signal?.aborted)abort();else signal?.addEventListener('abort',abort,{once:true});});}
-export async function probePublicTarget(target,{resolve=lookup,connect=tcpConnect}={}){
- if(!probeTargets.some(t=>t.id===target.id&&t.host===target.host))throw new Error('仅允许内置公网检测目标');
- const abort=new AbortController();let timer;try{return await Promise.race([(async()=>{const addresses=await resolve(target.host,{family:4,all:true});const address=addresses.find(item=>publicProbeIPv4(item.address))?.address;if(!address)return{ok:false,ms:null};return connect(address,443,{signal:abort.signal});})(),new Promise(resolve=>{timer=setTimeout(()=>{abort.abort();resolve({ok:false,ms:null});},4000);})]);}catch{return{ok:false,ms:null};}finally{clearTimeout(timer);abort.abort();}
-}
 function cleanSystem(s){if(!s||!s.profiles||typeof s.network?.up!=='boolean'||typeof s.network?.configured!=='boolean'||!['hy2.att','hy2.direct','vmess.att','vmess.direct'].every(id=>typeof s.profiles[id]?.active==='boolean'))throw new Error('服务状态不完整');return{profiles:Object.fromEntries(['vmess.att','vmess.direct','hy2.att','hy2.direct'].map(id=>[id,{active:s.profiles?.[id]?.active===true,state:String(s.profiles?.[id]?.state||'unknown').slice(0,24)}])),desired:Object.fromEntries(['vmess.att','vmess.direct','hy2.att','hy2.direct'].map(id=>[id,s.desired?.[id]===true])),emergencyStop:!!s.emergencyStop,guardPresent:typeof s.guardPresent==='boolean'?s.guardPresent:null,networkDesired:!!s.networkDesired,network:{configured:!!s.network?.configured,up:!!s.network?.up,protected:typeof s.network?.protected==='boolean'?s.network.protected:null,peers:(s.network?.peers||[]).map(p=>({handshakeAt:Number.isSafeInteger(p.handshakeAt)?p.handshakeAt:null}))},certificate:{notAfter:Number.isFinite(s.certificate?.notAfter)?s.certificate.notAfter:null,ok:s.certificate?.ok!==false}};}
-export function createNodeHealth({store,request,probe=probePublicTarget,localProbe=tcpConnect,enabled=true,intervalMs=15000}){
+export function createNodeHealth({store,request,localProbe=tcpConnect,enabled=true,intervalMs=15000}){
  let busy=null,closed=false,again=false;
  async function work(){
   const now=store.clock();let system;
   if(request)try{const data=cleanSystem(await request('status',{}, {timeout:8000}));system={at:store.clock(),ok:true,...data};store.set('health-system',system);}catch{store.set('health-system',{at:store.clock(),ok:false});}
   if(closed)return;
   if(system&&Object.entries(system.profiles).some(([id,p])=>id.startsWith('hy2')&&(p.active||system.desired[id]))){const result=await localProbe('127.0.0.1',18444);if(!closed)store.set('health-auth',{at:store.clock(),ok:result.ok});}
-  const cfg=healthSettings(store),prior=store.get('health-probes');if(cfg.probeEnabled&&(!prior||now-(prior.startedAt||prior.at)>=60000||now<prior.at)){
-   const targets=await Promise.all(probeTargets.map(async target=>{let result;try{result=await probe(target);}catch{result={ok:false,ms:null};}const before=prior?.targets?.find(t=>t.id===target.id);return{id:target.id,name:target.name,ok:result.ok===true,ms:result.ok&&Number.isFinite(result.ms)?Math.max(0,result.ms):null,failures:result.ok?0:(before?.failures||0)+1};}));
-   if(!closed)store.set('health-probes',{at:store.clock(),startedAt:now,targets});
-  }
+
  }
  function sample(force=false){if(closed||!enabled)return Promise.resolve();if(busy){again ||= force;return busy;}busy=work().catch(()=>{}).finally(()=>{busy=null;if(again&&!closed){again=false;sample();}});return busy;}
  let timer;if(enabled){timer=setInterval(sample,intervalMs);timer.unref();sample();}
@@ -46,7 +33,7 @@ export function nodeHealth(store,{managed=true}={}){
   const running=known?ids.filter(id=>system.profiles[id].active):[],bad=running.filter(id=>{const h=store.get('collector-health.'+id);return !fresh(h,now)||!h.ok;}),quota=!!store.db.prepare('SELECT 1 FROM users WHERE enabled=1 AND quota IS NOT NULL LIMIT 1').get();add('meter','用户流量统计',!running.length?'grey':!bad.length?'green':quota?'red':'yellow',!running.length?'暂无运行线路':!bad.length?'正常':`${bad.length} 条线路缺少统计`,'只检查运行中的线路。存在流量限制时，统计异常按关键故障显示。',{critical:quota,affects:running.length>0});
   const expires=system?.certificate.notAfter;if(hy2)add('certificate','Hy2 域名证书',!expires?'yellow':expires<=now?'red':!system.certificate.ok||expires-now<7*86400000?'yellow':'green',!expires?'有效期尚未确认':expires<=now?'证书已过期':!system.certificate.ok?'最近签发或续签失败':expires-now<7*86400000?'即将到期':'证书有效','检查服务证书的有效期；不把域名或证书当成防封保证。',{critical:true});
  }
- const cfg=healthSettings(store),probes=store.get('health-probes');for(const target of probeTargets){const result=probes?.targets?.find(t=>t.id===target.id),valid=fresh(probes,now,90000);add('probe-'+target.id,'国内站点 TCP · '+target.name,!cfg.probeEnabled?'grey':!valid||!result?'grey':result.ok?'green':result.failures<2?'grey':'yellow',!cfg.probeEnabled?'未开启':!valid||!result?'等待检测':result.ok?(result.ms===null?'连接成功':`${result.ms} ms`):result.failures<2?'首次失败，待复查':'连续连接失败',`${target.host}:443 · 每分钟从本机主动连接。只衡量TCP建连，站点可能使用境外CDN；不代表大陆用户到本机的线路，也不证明代理或网站内容可用。`,{affects:cfg.probeEnabled&&valid&&!!result&&(result.ok||result.failures>=2)});}
+
  if(fresh(host,now))for(const[key,name,threshold]of[['cpuPercent','CPU 使用',95],['memoryPercent','内存使用',92],['diskPercent','磁盘使用',90]])if(Number.isFinite(host[key]))add('resource-'+key,name,host[key]>=threshold?'yellow':'green',host[key].toFixed(1)+'%',`达到${threshold}%时提醒关注；瞬间占用不等于服务已经停止。`);
  add('controller','总控通信','grey','未接入','当前由本机独立管理，总控功能暂未开放，此项不计为故障。',{affects:false});
  let stoppedReason='全部业务线路当前已关闭，请结合日志确认停止原因。';
@@ -60,5 +47,5 @@ export function nodeHealth(store,{managed=true}={}){
  const businessCount=known?(relay?active.filter(id=>!id.endsWith('att')||system.network.up).length:active.length):0;if(known&&relay&&active.length&&!businessCount&&!system.network.up)stoppedReason='所有运行中的线路都依赖WG隧道；当前隧道不可用，业务线路无法通行。';
  const failures=rows.filter(r=>r.affects&&r.state==='red'),warnings=rows.filter(r=>r.affects&&r.state==='yellow');let state=!managed?'grey':!system?(source?'red':'yellow'):!businessCount?'black':failures.length?'red':warnings.length?'yellow':'green';
  if(known&&relay&&active.length&&system.guardPresent!==true&&state==='black')state='red';
- return{at:now,observedAt:source?.at||null,state,label:state==='green'?'服务正常':state==='yellow'?'部分项目需关注':state==='red'?'关键项目异常':state==='black'?'业务服务不可用':'尚未接入检测',reason:state==='black'?stoppedReason:state==='red'?failures.map(r=>r.name).join('、')||'无法确认关键服务状态':state==='yellow'?warnings.map(r=>r.name).join('、')||'正在取得服务状态':'未启用项目不参与判定。',rows,probeEnabled:cfg.probeEnabled,readOnly:true};
+ return{at:now,observedAt:source?.at||null,state,label:state==='green'?'服务正常':state==='yellow'?'部分项目需关注':state==='red'?'关键项目异常':state==='black'?'业务服务不可用':'尚未接入检测',reason:state==='black'?stoppedReason:state==='red'?failures.map(r=>r.name).join('、')||'无法确认关键服务状态':state==='yellow'?warnings.map(r=>r.name).join('、')||'正在取得服务状态':'未启用项目不参与判定。',rows,readOnly:true};
 }

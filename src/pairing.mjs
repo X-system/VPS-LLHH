@@ -1,3 +1,4 @@
+import{registerNotificationPeer,receiveNotification}from'./notification-relay.mjs';
 import{X509Certificate}from'node:crypto';
 import{token,digest}from'./security.mjs';
 import{HttpError,text}from'./validation.mjs';
@@ -7,7 +8,7 @@ import{decodeInvite,pairingPath,pairingRequest}from'./pairing-transport.mjs';
 import{publicProbeIPv4}from'./node-health.mjs';
 
 const UUID=/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/;
-export function createPairing({store,request,origin,tls,transport=pairingRequest,allowLocal=false,applyServices}){
+export function createPairing({store,request,origin,tls,transport=pairingRequest,allowLocal=false,applyServices,fetchImpl}){
  const load=key=>readSecret(store,'att-'+key),save=(key,value)=>store.set('att-'+key,value?store.seal(JSON.stringify(value)):null);
  let busy=false;
  const role=()=>store.get('settings').role;
@@ -34,7 +35,7 @@ export function createPairing({store,request,origin,tls,transport=pairingRequest
   const previous=load('outgoing');if(previous&&previous.expires>store.clock()&&previous.state!=='bound')throw new HttpError(409,'已有配对请求，请先完成或取消');
   const target=decodeInvite(raw),info=await local(),current=networkView(store),occupied=new Set((current.peers||[]).map(peer=>peer.address));
   const number=Array.from({length:253},(_,i)=>i+2).find(value=>!occupied.has('10.76.0.'+value));if(!number)throw new HttpError(409,'出口已没有可分配的隧道地址');
-  const plan=await request('plan-network'),peer={id:info.id,name:info.name,publicIPv4:info.publicIPv4,publicKey:info.publicKey,listenPort:plan.listenPort,address:'10.76.0.'+number};
+  const plan=await request('plan-network'),peer={id:info.id,name:info.name,publicIPv4:info.publicIPv4,publicKey:info.publicKey,listenPort:plan.listenPort,notification:{url:new URL(pairingPath,origin).href,fingerprint:certificateFingerprint()},address:'10.76.0.'+number};
   const answer=await transport(target,{action:'request',peer},{allowLocal});
   if(!answer?.id||!/^[A-Za-z0-9_-]{32,128}$/.test(answer.pollToken)||!Number.isSafeInteger(answer.expires))throw new HttpError(502,'远端返回的配对信息无效');
   save('outgoing',{target:{...target,token:answer.pollToken},id:answer.id,peer,expires:answer.expires,state:'waiting',automationToken:info.stopTokens?.automation??null});store.audit('发起ATT配对请求');return view();
@@ -61,15 +62,18 @@ export function createPairing({store,request,origin,tls,transport=pairingRequest
    if(!(await request('status')).emergencyStop&&!store.get('runtime')?.emergencyStop)await serviceAction(store,{action:'network-up',expectedAutomationToken:outgoing.automationToken},request);save('outgoing',{...outgoing,state:'applied'});
   }
   const activated=await transport(outgoing.target,{action:'activate',id:outgoing.id},{allowLocal});if(activated.state!=='bound')throw new HttpError(502,'双方尚未完成配对检查，请稍后再试');
+  registerNotificationPeer(store,{id:answer.relay.id,name:answer.relay.name,publicKey:answer.relay.publicKey,target:outgoing.target,key:outgoing.target.token});
   save('binding',{name:answer.relay.name,publicIPv4:answer.relay.publicIPv4,connectedAt:store.clock()});save('outgoing',{...outgoing,state:'bound'});store.audit('ATT配对完成');return view();
  }
  async function machine(secret,payload){
+  if(payload?.action==='notification')return receiveNotification(store,secret,payload,{fetchImpl});
   if(role()!=='relay'||typeof secret!=='string'||!payload||typeof payload!=='object')throw new HttpError(404,'Not found');
   const invitation=load('invitation');let pending=load('pending');
   if(payload.action==='request'){
    if(!invitation||invitation.expires<=store.clock()||invitation.hash!==digest(secret))throw new HttpError(404,'Not found');
    const peer=payload.peer;if(!peer||!UUID.test(peer.id)||!publicProbeIPv4(peer.publicIPv4)&&!allowLocal||!/^10\.76\.0\.(?:[2-9]|[1-9]\d|1\d\d|2[0-4]\d|25[0-4])$/.test(peer.address))throw new HttpError(400,'配对节点信息错误');
-   const clean={id:peer.id,name:text(peer.name,'出口名称',{max:48}),publicIPv4:peer.publicIPv4,publicKey:publicKey(peer.publicKey),listenPort:port(peer.listenPort),address:peer.address};
+   const notification=peer.notification?decodeInvite('ATT1.'+Buffer.from(JSON.stringify({...peer.notification,token:secret})).toString('base64url')):null;
+   const clean={...(notification?{notification:{url:notification.url,fingerprint:notification.fingerprint}}:{}),id:peer.id,name:text(peer.name,'出口名称',{max:48}),publicIPv4:peer.publicIPv4,publicKey:publicKey(peer.publicKey),listenPort:port(peer.listenPort),address:peer.address};
    if(invitation.requestId){if(pending?.peer.id!==clean.id||JSON.stringify(pending.peer)!==JSON.stringify(clean))throw new HttpError(404,'Not found');}
    else{pending={id:token(),pollToken:token(),expires:invitation.expires,state:'pending',peer:clean};save('pending',pending);save('invitation',{...invitation,requestId:pending.id});store.audit('收到ATT绑定请求');}
    return{id:pending.id,pollToken:pending.pollToken,expires:pending.expires};
@@ -79,6 +83,7 @@ export function createPairing({store,request,origin,tls,transport=pairingRequest
   if(payload.action==='activate'&&['approved','bound'].includes(pending.state)){
    if(pending.state!=='bound'){
     if(!(await request('status')).emergencyStop&&!store.get('runtime')?.emergencyStop)await serviceAction(store,{action:'network-up',expectedAutomationToken:pending.automationToken},request);
+    if(pending.peer.notification)registerNotificationPeer(store,{id:pending.peer.id,name:pending.peer.name,publicKey:pending.peer.publicKey,target:pending.peer.notification,key:pending.pollToken});
     save('binding',{name:pending.peer.name,publicIPv4:pending.peer.publicIPv4,connectedAt:store.clock()});save('pending',{...pending,state:'bound'});store.audit('ATT配对完成');
     if(store.get('onboarded')&&applyServices)try{await applyServices({resumeDesired:pending.resumeDesired,expectedAutomationToken:pending.automationToken});}catch{store.audit('配对已保存，线路配置待应用');}
    }return{state:'bound'};

@@ -9,6 +9,7 @@ import{collectHost}from'./telemetry.mjs';
 import{evaluateUserAlerts}from'./metrics.mjs';
 import{ingestTunnel}from'./tunnel-stats.mjs';
 import{enqueueEvent}from'./bark.mjs';
+import{evaluateConnectionAlerts}from'./line-state.mjs';
 import{execFile}from'node:child_process';
 import{promisify}from'node:util';
 
@@ -18,7 +19,8 @@ export function createRuntimeWorker({store,request=agentRequest,collectHy2=readH
  async function tick(){
   if(busy)return;busy=true;
   try{
-   const {profiles,desired={},certificate,emergencyStop,network:networkStatus,networkDesired,autoRepair,guardPresent,panelUseAcme,maintenance={}}=await request('status');
+   const system=await request('status');const {profiles,desired={},certificate,emergencyStop,network:networkStatus,networkDesired,autoRepair,guardPresent,panelUseAcme,maintenance={}}=system;
+   evaluateConnectionAlerts(store,system);
    store.set('service-status',{at:store.clock(),profiles});
    const observed=store.get('maintenance-observed')||{};
    for(const[kind,job]of Object.entries(maintenance))if(['update','panel'].includes(kind)&&Number.isSafeInteger(job.at)&&job.at!==observed[kind]){
@@ -45,7 +47,7 @@ export function createRuntimeWorker({store,request=agentRequest,collectHy2=readH
     if(!repaired){await request('stop-all');store.set('runtime',{...runtime,maintenance:true});store.audit('保护规则无法恢复，已停止全部线路');store.set('worker-health',{at:store.clock(),ok:true});return;}
    }
    if(networkStatus?.configured&&networkDesired&&(!networkStatus.up||networkStatus.protected===false)){
-    const{enqueueEvent}=await import('./bark.mjs');enqueueEvent(store,'tunnel.failed',{body:'本机WG接口缺失；隧道线路保持断线保护。'});
+    const{enqueueEvent}=await import('./bark.mjs');enqueueEvent(store,'tunnel.failed',{body:'ATT隧道连接异常，TCP及Hy2 → ATT线路不可用，请立即检查。'});
     if(autoRepair){try{const result=await request('repair-network');if(result.repaired)enqueueEvent(store,'repair.succeeded',{body:'WG接口及断线保护已恢复。'});}catch{enqueueEvent(store,'repair.failed',{body:'WG自动恢复未完成，请检查诊断日志。'});}}
    }
    const config=decode();if(!config){store.set('worker-health',{at:store.clock(),ok:true});return;}
