@@ -10,8 +10,8 @@
 
 | 面板 | 负责什么 | 独立版本与说明 | 状态 |
 | --- | --- | --- | --- |
-| **中转端** | 用户、订阅、直出和连接出口 | [中转端入口](apps/relay/README.md) · [版本发布](https://github.com/X-system/VPS-LLHH/releases?q=relay-) | 0.1.0-test1 / 0.2.0-test1 测试版 |
-| **出口端** | 接收中转连接、提供出口 | [出口端入口](apps/exit/README.md) · [版本发布](https://github.com/X-system/VPS-LLHH/releases?q=exit-) | 0.1.0-test1 / 0.2.0-test1 测试版 |
+| **中转端** | 用户、订阅、直出和连接出口 | [中转端入口](apps/relay/README.md) · [版本发布](https://github.com/X-system/VPS-LLHH/releases?q=relay-) | 0.2.0-test2 测试版，保留旧版 |
+| **出口端** | 接收中转连接、提供出口 | [出口端入口](apps/exit/README.md) · [版本发布](https://github.com/X-system/VPS-LLHH/releases?q=exit-) | 0.2.0-test2 测试版，保留旧版 |
 | **总控端** | 未来统一管理用户和分配线路 | [总控端入口](apps/controller/README.md) | 尚未开发，不能安装 |
 
 **一条安装命令 → 选择面板 → 选择该面板的版本 → 自动安装。** 固定版本看 Release / Tag，main 是开发代码。中转和出口共享底层程序，但按角色分别发布，避免混淆。
@@ -55,7 +55,7 @@ SSH输入`vps-panel`打开应急菜单。停止和急停可绕过网页及本机
 
 卸载分为保留数据和清除数据。保留数据后恢复安装使用`install.sh --source /绝对源码目录 --restore`，沿用管理员、入口、用户和用量，代理保持急停；网页从恢复引导继续，不重复设置已有账户，重新确认配对和启动。
 
-安装命令先选择中转端或出口端，再列出该面板实际发布版本供选择，测试版标注“（测试版）”；选择后自动安装对应角色。无人值守可指定 `--version v0.2.0-test1 --role relay`。已装其他版本时不会覆盖或降级，更新请走面板。完整规则见 [版本管理](docs/versioning.md)。
+安装命令先选择中转端或出口端，再列出该面板实际发布版本供选择，测试版标注“（测试版）”；选择后自动安装对应角色。无人值守可指定 `--version v0.2.0-test2 --role relay`。已装其他版本时不会覆盖或降级，更新请走面板。完整规则见 [版本管理](docs/versioning.md)。
 
 网页支持面板版本更新及回滚，变更期间代理停止，自检失败自动恢复。当前不自动升级Node或协议核心二进制，遇到组件摘要变化会拒绝该版本。代码仓库：[X-system/VPS-LLHH](https://github.com/X-system/VPS-LLHH)。安装和在线更新使用[公开Release](https://github.com/X-system/VPS-LLHH/releases/latest)，安装包和脚本均附带SHA256校验文件。已在干净的Debian12中转测试机验证公网安装入口；正式使用前仍建议在自己的服务器验收。
 

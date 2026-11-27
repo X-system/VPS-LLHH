@@ -47,7 +47,9 @@ def main():
         status,release=request(api+'/releases/tags/'+tag)
         test='-test'in tag
         if status==404:
+            notes=root/'docs/releases'/(version[1:]+'.md')
             body={'tag_name':tag,'target_commitish':commit,'name':'【'+('中转端'if role=='relay'else '出口端')+'】'+version[1:]+('（测试版）'if test else ''),'draft':True,'prerelease':test,'body':('测试版，尚非正式发布。'if test else '正式版本。')+' Debian 12 amd64。固定标签和程序包不覆盖。安装后按中文网页配置；代理默认停止。BBRX（如提供）为实验性功能，未验证提速收益。'}
+            if notes.exists():body['body']=notes.read_text(encoding='utf-8')
             _,release=request(api+'/releases','POST',json.dumps(body).encode())
         if not release['draft']:
             print(tag+' already published; immutable program release retained.');return
@@ -81,7 +83,7 @@ def main():
         status,release=request(api+'/releases/tags/v0.2.0')
         if status!=200 or release['draft']:raise RuntimeError('Legacy installer release missing')
         upload(release,installer_files,rolling=True)
-        request(api+'/releases/'+str(release['id']),'PATCH',json.dumps({'name':'安装入口（兼容原 v0.2.0 下载地址）','body':MARKER+'\n此记录保留旧安装命令与原程序包，安装脚本提供实际版本选择。程序新版本使用独立 Tag / Release；v0.2.0 原标签、程序包保持不变。开发测试版本请见 relay-v0.1.0-test1 / relay-v0.2.0-test1（中转）或 exit-v0.1.0-test1 / exit-v0.2.0-test1（出口）。'}).encode())
+        request(api+'/releases/'+str(release['id']),'PATCH',json.dumps({'name':'安装入口（兼容原 v0.2.0 下载地址）','body':MARKER+'\n此记录保留旧安装命令与原程序包，安装脚本提供实际版本选择。程序新版本使用独立 Tag / Release；v0.2.0 原标签、程序包保持不变。中转、出口按面板和版本独立发布。最新可用版本以安装菜单和各面板入口的版本表为准。'}).encode())
         print('Rolling installer entry refreshed; original program package retained.')
 if __name__=='__main__':
     try:main()
