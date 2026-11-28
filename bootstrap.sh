@@ -1,5 +1,5 @@
 #!/bin/bash
-set -euo pipefail
+set -Eeuo pipefail
 umask 077
 REPOSITORY=''
 VERSION=''
@@ -12,12 +12,11 @@ done
 [[ -z $VERSION || $VERSION =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-test[1-9][0-9]*)?$ ]] || { echo '版本格式错误，例如 v0.2.0-test1';exit 1; }
 [[ -z $INSTALL_ROLE || $INSTALL_ROLE == relay || $INSTALL_ROLE == exit ]] || { echo '安装角色错误。';exit 1; }
 [[ $(id -u) == 0 ]] || { echo '请使用root或sudo。';exit 1; }
-if ! command -v curl >/dev/null || ! command -v python3 >/dev/null || [[ ! -s /etc/ssl/certs/ca-certificates.crt ]];then
- command -v apt-get >/dev/null || { echo '当前安装引导仅支持具备apt的Linux环境。';exit 1; }
- export DEBIAN_FRONTEND=noninteractive
- apt-get update -qq
- apt-get install -y --no-install-recommends ca-certificates curl python3
+# LLHH_EMBED_ENVIRONMENT
+if ! declare -F llhh_environment >/dev/null;then
+ source "$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)/config/install-environment.sh"
 fi
+llhh_environment ca-certificates curl python3
 if [[ -z $INSTALL_ROLE ]];then
  echo '请选择安装面板：'
  echo '  1. 中转端'
@@ -34,6 +33,7 @@ echo '安装版本：'
 STAGE=$(mktemp -d /var/tmp/vps-panel-bootstrap.XXXXXXXX)
 cleanup(){ if [[ $STAGE == /var/tmp/vps-panel-bootstrap.* && -d $STAGE && ! -L $STAGE ]];then rm -rf -- "$STAGE";fi; }
 trap cleanup EXIT
+llhh_step '获取可安装版本列表'
 python3 - "$REPOSITORY" "$STAGE/versions.json" "$INSTALL_ROLE" <<'CATALOG'
 import sys,json,re,urllib.request
 repo=sys.argv[1];role=sys.argv[3];found={}
@@ -80,7 +80,8 @@ if path.exists():
 EXISTING
 ASSET="vps-panel-$VERSION.tar.gz"
 BASE="https://github.com/$REPOSITORY/releases/download/$INSTALL_ROLE-$VERSION"
-curl --proto '=https' --tlsv1.2 -fL --connect-timeout 15 --max-time 180 --max-filesize 20971520 "$BASE/$ASSET" -o "$STAGE/$ASSET"
+llhh_step '下载并验证安装包'
+curl --retry 3 --proto '=https' --tlsv1.2 -fL --connect-timeout 15 --max-time 180 --max-filesize 20971520 "$BASE/$ASSET" -o "$STAGE/$ASSET"
 python3 - "$STAGE/$ASSET" "$EXPECTED" "$STAGE/source" "$VERSION" <<'PACKAGE'
 import sys,pathlib,hashlib,tarfile,json,sqlite3
 archive=pathlib.Path(sys.argv[1]);assert hashlib.sha256(archive.read_bytes()).hexdigest()==sys.argv[2],'发布包校验失败'
@@ -113,6 +114,7 @@ if [[ -n $INSTALL_ROLE ]];then
  INSTALL_ARGS+=(--role "$INSTALL_ROLE")
 fi
 echo "正在安装：${VERSION#v}"
+llhh_step '安装面板与后台服务'
 bash "$STAGE/source/install.sh" --source "$STAGE/source" "${INSTALL_ARGS[@]}"
 printf '%s\n' "$REPOSITORY" >/etc/vps-panel/repository
 chmod 600 /etc/vps-panel/repository

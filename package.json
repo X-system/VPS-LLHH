@@ -1,6 +1,6 @@
 {
   "name": "vps-panel",
-  "version": "0.3.2",
+  "version": "0.3.3-test1",
   "private": true,
   "description": "中文中转机与出口机管理面板",
   "type": "module",

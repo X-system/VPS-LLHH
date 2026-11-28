@@ -20,7 +20,10 @@ def main():
     repository=os.environ.get('GITHUB_REPOSITORY','');revision=os.environ.get('GITHUB_SHA','')
     version='v'+json.loads((ROOT/'package.json').read_text(encoding='utf-8'))['version']
     release_notes(ROOT,version)
-    bootstrap=installer(repository,version,(ROOT/'bootstrap.sh').read_text(encoding='utf-8')).encode()
+    bootstrap_source=(ROOT/'bootstrap.sh').read_text(encoding='utf-8')
+    if '# LLHH_EMBED_ENVIRONMENT' in bootstrap_source:
+        bootstrap_source=bootstrap_source.replace('# LLHH_EMBED_ENVIRONMENT',(ROOT/'config/install-environment.sh').read_text(encoding='utf-8'))
+    bootstrap=installer(repository,version,bootstrap_source).encode()
     if not re.fullmatch(r'[a-f0-9]{40}',revision):raise ValueError('Missing exact commit')
     token=os.environ.pop('GH_RELEASE_TOKEN','')
     if not token:raise ValueError('Missing GitHub workflow token')

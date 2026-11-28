@@ -1,5 +1,5 @@
 #!/bin/bash
-set -euo pipefail
+set -Eeuo pipefail
 umask 077
 
 # Development installer: install from an inspected source tree. A public release
@@ -15,6 +15,9 @@ while [[ $# -gt 0 ]]; do
  case "$1" in --source) SOURCE=${2:?缺少源码目录}; shift 2;; --restore) RESTORE=1;shift;; --role) INSTALL_ROLE=${2:?缺少安装角色};shift 2;;*) echo '使用：bash install.sh --source /绝对源码目录 [--role relay|exit] [--restore]' >&2; exit 1;; esac
 done
 [[ -n $SOURCE && $SOURCE = /* && -f $SOURCE/src/server.mjs && -f $SOURCE/config/releases.json ]] || { echo '请提供完整源码的绝对路径。' >&2; exit 1; }
+source "$SOURCE/config/install-environment.sh"
+llhh_environment ca-certificates curl python3 xz-utils unzip openssl nftables iproute2 wireguard-tools util-linux kmod
+llhh_step '检查已有面板与数据兼容性'
 python3 - "$SOURCE" "$INSTALL_ROLE" <<'VERSION_GUARD'
 import sys,json,pathlib,sqlite3
 source=pathlib.Path(sys.argv[1]);installed=pathlib.Path('/usr/local/lib/vps-panel/app/package.json')
@@ -102,8 +105,7 @@ if [[ $RESTORE == 0 && -z $INSTALL_ROLE ]];then
 fi
 [[ $RESTORE == 1 || $INSTALL_ROLE == relay || $INSTALL_ROLE == exit ]] || { echo '安装角色必须为relay或exit。' >&2;exit 1; }
 export DEBIAN_FRONTEND=noninteractive
-apt-get update -qq
-apt-get install -y --no-install-recommends ca-certificates curl xz-utils unzip openssl nftables iproute2 wireguard-tools python3 util-linux kmod
+llhh_step '检查WireGuard与防火墙能力'
 if ! unshare --net /bin/sh -eu -c '
  ip link add vps-probe type wireguard
  nft add table inet vps_panel_probe
@@ -111,6 +113,7 @@ if ! unshare --net /bin/sh -eu -c '
  nft add table ip vps_panel_probe_nat
  nft add chain ip vps_panel_probe_nat postrouting "{ type nat hook postrouting priority 100; policy accept; }"
 ' >/dev/null; then echo '内核或虚拟化权限不支持所需WG与防火墙能力，已停止安装；未修改主机路由。' >&2;exit 1;fi
+llhh_step '检测网络与准备安装'
 NETWORK_SETTINGS=$(python3 "$SOURCE/scripts/install_network.py" "$RESTORE")
 mapfile -t PANEL_VALUES <<<"$NETWORK_SETTINGS"
 PANEL_BIND=${PANEL_VALUES[0]}
@@ -131,6 +134,7 @@ if ! id vps-panel >/dev/null 2>&1; then useradd --system --gid vps-panel --home-
 for profile in vmess-att vmess-direct hy2-att hy2-direct; do
  if ! id "vps-panel-$profile" >/dev/null 2>&1; then useradd --system --user-group --home-dir /nonexistent --shell /usr/sbin/nologin "vps-panel-$profile"; fi
 done
+llhh_step '下载并校验Node、TCP和Hy2核心'
 python3 - "$SOURCE/config/releases.json" "$STAGE" <<'PY'
 import json,subprocess,pathlib,sys,hashlib,urllib.parse
 manifest=json.loads(pathlib.Path(sys.argv[1]).read_text());stage=pathlib.Path(sys.argv[2])
@@ -152,6 +156,7 @@ install -m 755 "$STAGE/xray-files/xray" /usr/local/lib/vps-panel/xray
 install -m 755 "$STAGE/hysteria" /usr/local/lib/vps-panel/hysteria
 cp -a "$STAGE/runtime" /usr/local/lib/vps-panel/runtime
 cp -a "$STAGE/app" /usr/local/lib/vps-panel/app
+llhh_step '安装面板依赖'
 /usr/local/lib/vps-panel/runtime/bin/node /usr/local/lib/vps-panel/runtime/lib/node_modules/npm/bin/npm-cli.js ci --omit=dev --ignore-scripts --no-audit --no-fund --prefix /usr/local/lib/vps-panel/app
 chown -R root:root /usr/local/lib/vps-panel
 chmod -R go+rX /usr/local/lib/vps-panel
@@ -225,6 +230,7 @@ if(result.restored&&process.argv[3]==='1'){
 writeFileSync('/etc/vps-panel/system.json',JSON.stringify({...panel,role:result.role,emergencyStop:result.restored,desired:{},networkDesired:false,autoStart:false,autoRepair:false}),{mode:0o600});
 JS
 install -m 755 /usr/local/lib/vps-panel/app/config/vps-panel /usr/local/bin/vps-panel
+llhh_step '启动管理服务并验证配置'
 systemctl daemon-reload
 systemd-analyze verify /etc/systemd/system/vps-panel-{agent,web,auth,worker,network,guard}.service /etc/systemd/system/vps-panel-{vmess-att,vmess-direct,hy2-att,hy2-direct}.service
 systemctl enable --now vps-panel-agent.service vps-panel-web.service vps-panel-auth.service vps-panel-worker.service
@@ -234,6 +240,7 @@ import{createFirewall}from'/usr/local/lib/vps-panel/app/src/firewall.mjs';
 await createFirewall().allowPort(Number(process.argv[2]),'tcp','vps-panel-web');
 JS
 fi
+llhh_step '检查HTTPS、管理入口和后台服务'
 /usr/local/lib/vps-panel/runtime/bin/node --input-type=module - <<'JS'
 import{managementHealth}from'/usr/local/lib/vps-panel/app/src/management-health.mjs';
 await managementHealth({attempts:60});

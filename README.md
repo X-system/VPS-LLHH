@@ -2,7 +2,7 @@
 
 支持中转机与出口机两种角色，入口协议限定为 VMess 原始 TCP 与 Hysteria2。
 
-**当前版本 0.3.2。安装环境为 Debian 12 amd64；其他系统尚未开放安装。**
+**当前版本 0.3.3-test1（测试版）。安装环境为 Debian 12 amd64；其他系统尚未开放安装。**
 
 运行数据、登录凭证、私钥和实际运维报告不进入代码仓库。面板仍处于测试阶段，请先在可重装的测试VPS上验收。
 
@@ -10,8 +10,8 @@
 
 | 面板 | 负责什么 | 独立版本与说明 | 状态 |
 | --- | --- | --- | --- |
-| **中转端** | 用户、订阅、直出和连接出口 | [中转端入口](apps/relay/README.md) · [版本发布](https://github.com/X-system/VPS-LLHH/releases?q=relay-) | 0.3.2，保留旧版 |
-| **出口端** | 接收中转连接、提供出口 | [出口端入口](apps/exit/README.md) · [版本发布](https://github.com/X-system/VPS-LLHH/releases?q=exit-) | 0.3.2，保留旧版 |
+| **中转端** | 用户、订阅、直出和连接出口 | [中转端入口](apps/relay/README.md) · [版本发布](https://github.com/X-system/VPS-LLHH/releases?q=relay-) | 0.3.3-test1 测试版，保留旧版 |
+| **出口端** | 接收中转连接、提供出口 | [出口端入口](apps/exit/README.md) · [版本发布](https://github.com/X-system/VPS-LLHH/releases?q=exit-) | 0.3.3-test1 测试版，保留旧版 |
 | **总控端** | 未来统一管理用户和分配线路 | [总控端入口](apps/controller/README.md) | 尚未开发，不能安装 |
 
 **一条安装命令 → 选择面板 → 选择该面板的版本 → 自动安装。** 固定版本看 Release / Tag，main 是开发代码。中转和出口共享底层程序，但按角色分别发布，避免混淆。
@@ -38,7 +38,31 @@ node src/cli.mjs address
 以root登录Debian12 amd64，执行这一条命令：
 
 ```sh
-bash -c 'set -euo pipefail; curl --proto =https --tlsv1.2 -fsSL --retry 2 https://github.com/X-system/VPS-LLHH/releases/latest/download/bootstrap.sh | bash'
+bash -c 'set -Eeuo pipefail
+step="检查安装入口"
+entry_error(){ code=$?; printf "\n[LLHH] 无法继续：%s（退出码 %s）。请查看上方错误。\n" "$step" "$code" >&2; exit "$code"; }
+trap entry_error ERR
+[[ $EUID == 0 ]] || { echo "[LLHH] 请使用root登录后运行。"; exit 1; }
+[[ -r /etc/os-release ]] || { echo "[LLHH] 无法识别系统，请使用Debian 12 amd64。"; exit 1; }
+source /etc/os-release
+[[ $ID == debian && $VERSION_ID == 12 && $(uname -m) == x86_64 ]] || { echo "[LLHH] 当前只支持Debian 12 amd64，已停止，未修改软件源。"; exit 1; }
+step="准备下载组件：检查软件源、服务器联网及可用空间"
+if ! command -v curl >/dev/null || ! command -v python3 >/dev/null || [[ ! -s /etc/ssl/certs/ca-certificates.crt ]];then
+ echo "[LLHH] 正在自动安装下载组件和CA证书，请等待；软件包锁最多等待120秒。"
+ export DEBIAN_FRONTEND=noninteractive
+ apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=20 -o Acquire::https::Timeout=20 -o DPkg::Lock::Timeout=120 update --error-on=any
+ apt-get -o DPkg::Lock::Timeout=120 -o Acquire::Retries=3 --no-remove install -y --no-install-recommends ca-certificates curl python3
+fi
+command -v curl >/dev/null && command -v python3 >/dev/null && [[ -s /etc/ssl/certs/ca-certificates.crt ]] || { echo "[LLHH] 下载组件安装后检查失败，请保留上方软件包错误信息。"; exit 1; }
+step="下载LLHH引导：请检查DNS、时间和到GitHub的HTTPS连接"
+file=$(mktemp /var/tmp/llhh-entry.XXXXXXXX)
+cleanup(){ rm -f -- "$file"; }; trap cleanup EXIT
+curl --proto "=https" --tlsv1.2 -fsSL --retry 3 --connect-timeout 15 --max-time 180 https://github.com/X-system/VPS-LLHH/releases/download/v0.2.0/bootstrap.sh -o "$file"
+[[ -s $file ]] || { echo "[LLHH] 下载结果为空，没有执行安装。"; exit 1; }
+step="检查下载脚本完整性"
+bash -n "$file"
+step="运行LLHH安装引导"
+bash "$file"'
 ```
 
 安装时选择：`1` 中转端，或 `2` 出口端。安装完成后打开终端显示的一次性设置链接，继续网页引导。首次通过IP访问会使用自签证书，浏览器可能提示证书未受信任；先核对服务器地址。
@@ -55,12 +79,14 @@ SSH输入`vps-panel`打开应急菜单。停止和急停可绕过网页及本机
 
 卸载分为保留数据和清除数据。保留数据后恢复安装使用`install.sh --source /绝对源码目录 --restore`，沿用管理员、入口、用户和用量，代理保持急停；网页从恢复引导继续，不重复设置已有账户，重新确认配对和启动。
 
-安装命令先选择中转端或出口端，再列出该面板实际发布版本供选择，测试版标注“（测试版）”；选择后自动安装对应角色。无人值守可指定 `--version v0.3.2 --role relay`。已装其他版本时不会覆盖或降级，更新请走面板。完整规则见 [版本管理](docs/versioning.md)。
+安装命令先选择中转端或出口端，再列出该面板实际发布版本供选择，测试版标注“（测试版）”；选择后自动安装对应角色。无人值守可指定 `--version v0.3.3-test1 --role relay`。已装其他版本时不会覆盖或降级，更新请走面板。完整规则见 [版本管理](docs/versioning.md)。
 
 网页支持面板版本更新及回滚，变更期间代理停止，自检失败自动恢复。当前不自动升级Node或协议核心二进制，遇到组件摘要变化会拒绝该版本。代码仓库：[X-system/VPS-LLHH](https://github.com/X-system/VPS-LLHH)。安装和在线更新使用[公开Release](https://github.com/X-system/VPS-LLHH/releases/latest)，安装包和脚本均附带SHA256校验文件。已在干净的Debian12中转测试机验证公网安装入口；正式使用前仍建议在自己的服务器验收。
 
-## 当前版本：0.3.2
+## 当前版本：0.3.3-test1（测试版）
 
-修复监控坐标字号被其他样式放大、宽屏图表过高的问题。图表按实际容器宽度绘制，坐标字保持约13px，首页高度收紧，兼顾桌面与手机。补齐0.3.1界面文字调整，精简监控及出口表格的重复说明，调整协议摘要顺序。
+安装入口先检查系统和权限，自动安装curl、Python3和CA证书，完整下载引导后再执行。安装器提前补齐依赖，检查systemd、空间、WG与防火墙能力，逐步显示进度和失败原因；软件包锁有限等待，不强杀进程、不删除锁文件、不绕过HTTPS校验。
 
-完整变化见[0.3.2发布说明](docs/releases/0.3.2.md)。包含0.3.1的用户管理、证书、配对、订阅、更新说明与Bark功能。旧版本保留独立标签和安装包，总控端仍未开放安装。
+上面的命令使用持续维护的安装入口（兼容入口标签v0.2.0，不代表安装0.2.0）。运行后选择面板及0.3.3-test1；旧版本不被覆盖。
+
+完整变化见[0.3.3-test1发布说明](docs/releases/0.3.3-test1.md)。包含0.3.2全部功能和界面修复。总控端尚未开放安装。
