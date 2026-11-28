@@ -21,7 +21,7 @@ export async function pairingRequest(target,payload,{allowLocal=false,resolve=lo
  return new Promise((resolve,reject)=>{
   let done=false;const fail=()=>{if(done)return;done=true;reject(new HttpError(502,'无法完成ATT通信，请检查两台面板能否互相访问，或重新生成连接密钥'));};
   const request=https.request(url,{method:'POST',agent:false,family:4,autoSelectFamily:false,rejectUnauthorized:false,lookup:(_host,_options,callback)=>callback(null,address,4),headers:{'Content-Type':'application/json','Content-Length':body.length,Authorization:'Bearer '+target.token}},response=>{
-   let size=0;const chunks=[];response.on('data',chunk=>{size+=chunk.length;if(size>16384){response.destroy();fail();}else chunks.push(chunk);});response.on('error',fail);response.on('end',()=>{if(done)return;if(response.statusCode!==200)return fail();try{const data=JSON.parse(Buffer.concat(chunks));done=true;resolve(data);}catch{fail();}});
+   let size=0;const chunks=[];response.on('data',chunk=>{size+=chunk.length;if(size>16384){response.destroy();fail();}else chunks.push(chunk);});response.on('error',fail);response.on('end',()=>{if(done)return;try{const data=JSON.parse(Buffer.concat(chunks));if(response.statusCode!==200){if(response.statusCode===409&&typeof data.error==='string'&&/^已有名为.{1,48}的中转机，请更换命名$/.test(data.error)){done=true;reject(new HttpError(409,data.error));return;}return fail();}done=true;resolve(data);}catch{fail();}});
   });
   // Do not send the bearer token until the actual peer certificate has been pinned.
   request.on('socket',socket=>socket.once('secureConnect',()=>{

@@ -39,7 +39,7 @@ import{connectionStates}from'./line-state.mjs';
 import{notificationSettingsView,saveNotificationProfile,setNotificationEnabled,notificationTestMessage}from'./alert-settings.mjs';
 
 const publicDirectory = fileURLToPath(new URL('../public/', import.meta.url));
-const assets = new Map([['', ['index.html','text/html; charset=utf-8']],...['app.js','ui-alert-settings.mjs','ui-updates.mjs','presence.mjs','ui-kit.mjs','ui-help.mjs','ui-pages.mjs','ui-config.mjs','ui-mobile.mjs','ui-monitor.mjs','ui-feedback.mjs','ui-health.mjs','ui-user-details.mjs','ui-onboarding.mjs','ui-pairing.mjs','ui-service-settings.mjs'].map(name=>[name,[name,'text/javascript; charset=utf-8']]),...['style.css','ui-style.css','ui-mobile.css','ui-monitor.css','ui-feedback.css','ui-health.css'].map(name=>[name,[name,'text/css; charset=utf-8']]),['login-background.png',['login-background.png','image/png']]]);
+const assets = new Map([['', ['index.html','text/html; charset=utf-8']],...['app.js','ui-alert-settings.mjs','ui-updates.mjs','presence.mjs','ui-kit.mjs','ui-help.mjs','ui-pages.mjs','ui-config.mjs','ui-mobile.mjs','ui-monitor.mjs','ui-feedback.mjs','ui-health.mjs','ui-user-details.mjs','ui-first-user.mjs','ui-request.mjs','ui-onboarding.mjs','ui-pairing.mjs','ui-service-settings.mjs'].map(name=>[name,[name,'text/javascript; charset=utf-8']]),...['style.css','ui-style.css','ui-mobile.css','ui-monitor.css','ui-feedback.css','ui-health.css'].map(name=>[name,[name,'text/css; charset=utf-8']]),['login-background.png',['login-background.png','image/png']]]);
 const DAY = 86400_000;
 const appVersion=JSON.parse(readFileSync(new URL('../package.json',import.meta.url),'utf8')).version;
 
@@ -249,6 +249,15 @@ export async function createApp(options = {}) {
           cores:['vmess.att','vmess.direct','hy2.att','hy2.direct'].map(id=>({id,name:`${id.startsWith('hy2')?'Hy2':'TCP'} · ${id.endsWith('att')?'ATT':'直出'}`,status:fresh?(status.profiles[id]?.active?'运行中':'已停止'):'状态未知'})),
           host:{ adapter:systemRequest?'Linux管理器':'本地开发',systemChangesEnabled:!!systemRequest }, deploymentReady:!!readSecret(store,'relay-config'),configuration:relayView(store),telemetry:store.get('host-telemetry')||null,trend:store.get('traffic-samples')||[] });
       }
+      if(suffix==='api/user-setup'){
+        const mode=store.get('first-user-mode'),count=store.db.prepare('SELECT COUNT(*) AS n FROM users').get().n;
+        if(req.method==='GET')return json(res,200,{required:store.get('settings').role==='relay'&&!!store.get('onboarded')&&!mode&&count===0,mode:mode?.mode||null});
+        if(req.method==='POST'){
+          const data=await body(req);if(store.get('settings').role!=='relay'||!store.get('onboarded')||!['independent','controller'].includes(data.mode))throw new HttpError(400,'请选择有效的用户管理方式');
+          if(data.mode==='controller'&&count>0)throw new HttpError(409,'已有本机用户，请先处理现有用户再切换管理方式');
+          store.set('first-user-mode',{mode:data.mode,at:store.clock()});store.audit('选择用户管理方式',{mode:data.mode});return json(res,200,{ok:true,mode:data.mode});
+        }
+      }
       if (req.method === 'GET' && suffix === 'api/users') return json(res,200,{ users:userRows(),deleted:deletedUsage(store),monthlyUsage:monthlyUserUsage(store) });
       if(req.method==='GET'&&suffix==='api/line-catalog')return json(res,200,{lines:catalog(store)});
       if(suffix==='api/subscription-settings'){
@@ -266,7 +275,7 @@ export async function createApp(options = {}) {
         const value = validateUser(await body(req));
         const id = randomUUID();
         const credentials = store.seal(JSON.stringify({ vmess:randomUUID(),hy2:token(),subscription:token() }));
-        store.transaction(()=>{store.db.prepare('INSERT INTO users VALUES(?,?,?,?,?,?,?,?,?)').run(id,value.name,Number(value.enabled),JSON.stringify(value.protocols),JSON.stringify(value.exits),value.quota,value.expires,credentials,store.clock());saveLines(store,id,value.lines);store.audit('添加用户',{ id });});
+        store.transaction(()=>{store.db.prepare('INSERT INTO users VALUES(?,?,?,?,?,?,?,?,?)').run(id,value.name,Number(value.enabled),JSON.stringify(value.protocols),JSON.stringify(value.exits),value.quota,value.expires,credentials,store.clock());saveLines(store,id,value.lines);store.set('first-user-mode',{mode:'independent',at:store.clock()});store.audit('添加用户',{ id });});
         indexSubscriptions(store);
         return json(res,201,{ user:userRows().find(user=>user.id===id), message:readSecret(store,'relay-config')?'用户已保存，运行线路的权限由后台同步':'用户已保存，请配置协议线路后再生成链接' });
       }

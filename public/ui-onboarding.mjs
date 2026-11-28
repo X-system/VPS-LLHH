@@ -6,7 +6,7 @@ export async function renderOnboarding(root,ctx){
  if(!data.active)return ctx.navigate('overview');
  if(data.step==='welcome'){
   root.innerHTML='<main class="activation-welcome"><div class="activation-halo" aria-hidden="true"></div><section><div class="activation-hello">你好</div><h1>欢迎使用 LLHH</h1><p>从这里开始，让每一条线路尽在掌握。</p><button type="button" class="activation-start">激活面板 <span aria-hidden="true">→</span></button><small>接下来，创建只属于你的管理账户。</small><p class="activation-error" role="alert" hidden></p></section></main>';
-  root.querySelector('button').onclick=async event=>{const button=event.currentTarget;button.disabled=true;button.setAttribute('aria-busy','true');try{const result=await ctx.api('onboarding',{method:'POST',data:{step:'welcome'}});Object.assign(ctx.state.meta,result.meta);await renderOnboarding(root,ctx);}catch(e){const error=root.querySelector('[role=alert]');error.hidden=false;error.textContent=e.message;button.disabled=false;button.removeAttribute('aria-busy');}};return;
+  root.querySelector('button').onclick=async event=>{const button=event.currentTarget;button.disabled=true;button.setAttribute('aria-busy','true');try{const result=await ctx.api('onboarding',{method:'POST',data:{step:'welcome'}});Object.assign(ctx.state.meta,result.meta);await renderOnboarding(root,ctx);}catch(e){if(e.network)try{await renderOnboarding(root,ctx);return;}catch{}const error=root.querySelector('[role=alert]');error.hidden=false;error.textContent=e.message;button.disabled=false;button.removeAttribute('aria-busy');}};return;
  }
  const visibleSteps=data.steps.filter(id=>id!=='welcome'),index=visibleSteps.indexOf(data.step),draft=data.draft;
  root.innerHTML=`<div class="onboarding-page"><aside class="onboarding-sidebar"><div class="onboarding-brand">${icon('network')} 服务器管理</div><strong>${data.role==='exit'?'出口端':'中转端'}首次设置</strong><p>每次只做一步，程序负责配置和检查。</p><ol>${visibleSteps.map((id,i)=>`<li class="${i===index?'current':i<index?'done':''}"><span>${i<index?'✓':i+1}</span>${labels[id]}</li>`).join('')}</ol><small>进度自动保存，可以稍后回来继续。</small></aside><main class="onboarding-main"><div class="onboarding-step">第 ${index+1} 步，共 ${visibleSteps.length} 步</div><h1>${labels[data.step]}</h1><div data-onboarding-body></div><p class="form-error" role="alert" hidden></p></main></div>`;
@@ -25,7 +25,10 @@ export async function renderOnboarding(root,ctx){
  const submit=async input=>{
   const controls=[...body.querySelectorAll('button')];controls.forEach(button=>button.disabled=true);error.hidden=true;
   try{const result=await ctx.api('onboarding',{method:'POST',data:{step:data.step,...input}});if(result.csrf)ctx.state.csrf=result.csrf;Object.assign(ctx.state.meta,result.meta);if(root.isConnected)await renderOnboarding(root,ctx);}
-  catch(e){showError(e);controls.forEach(button=>button.disabled=false);}
+  catch(e){
+   if(e.network)try{const session=await ctx.api('session');ctx.state.csrf=session.csrf;Object.assign(ctx.state.meta,session);const current=await ctx.api('onboarding');if(!current.active||current.step!==data.step||current.job?.state==='running'||data.step==='certificate'&&current.draft?.domain){Object.assign(ctx.state.meta,current.meta);await renderOnboarding(root,ctx);return;}}catch{}
+   showError(e);controls.forEach(button=>button.disabled=false);
+  }
  };
  const form=body.querySelector('form');if(form)form.onsubmit=event=>{
   event.preventDefault();const values=Object.fromEntries(new FormData(form));
@@ -37,7 +40,7 @@ export async function renderOnboarding(root,ctx){
  const skip=body.querySelector('[data-skip]');if(skip)skip.onclick=()=>submit({skip:true});
  const finish=body.querySelector('[data-finish]');if(finish)finish.onclick=()=>submit({confirmed:true,releaseRecovery:body.querySelector('[name=releaseRecovery]')?.checked===true});
  const advance=body.querySelector('[data-next]');if(advance)advance.onclick=()=>submit({});
- const holder=body.querySelector('[data-pairing]');if(holder){await pairingControls(holder,ctx);body.querySelectorAll('[name=useAtt]').forEach(input=>input.onchange=()=>{holder.hidden=form.elements.useAtt.value!=='yes';});}
+ const holder=body.querySelector('[data-pairing]');if(holder){await pairingControls(holder,ctx,{onBound:async()=>{if(!body.isConnected)return;if(data.role==='relay'){const choice=body.querySelector('[name=useAtt][value=yes]');if(choice)choice.checked=true;await submit({useAtt:true});}else await submit({});}});body.querySelectorAll('[name=useAtt]').forEach(input=>input.onchange=()=>{holder.hidden=form.elements.useAtt.value!=='yes';});}
  if(data.step==='certificate'&&draft.domain){
   const status=body.querySelector('.certificate-job-state');let busy=false;
   const tick=async()=>{if(!body.isConnected){clearInterval(timer);return;}if(busy)return;busy=true;try{const cert=await ctx.api('certificate');status.textContent=cert.job?'正在申请证书，验证域名可能需要几分钟…':cert.ok===false?'申请未完成，请检查上面的域名、令牌和邮箱后重试。':'正在检查证书结果…';if(cert.certificateStaging===false&&cert.certificateDomain===draft.domain&&cert.notAfter>Date.now()){clearInterval(timer);await submit({check:true});}}catch(e){showError(e);}finally{busy=false;}};

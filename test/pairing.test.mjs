@@ -10,7 +10,15 @@ import{createPairing}from'../src/pairing.mjs';
 import{decodeInvite,pairingRequest,pairingPath}from'../src/pairing-transport.mjs';
 
 import{certificate}from'./tls-fixture.mjs';
+import{wgKeys}from'../src/network.mjs';
 const tls=certificate();
+test('出口已有同名不同身份中转机时，双方均提示重名，尚未创建请求或更改网络',async t=>{
+ const f=await fixture(t),existing={name:'中转一号',publicKey:Buffer.alloc(32,7).toString('base64'),address:'10.76.0.9'};
+ const config={privateKey:wgKeys().privateKey,physicalInterface:'eth0',address:'10.76.0.1',listenPort:51820,peers:[existing]};f.exit.store.set('network-config',f.exit.store.seal(JSON.stringify(config)));
+ const invite=await f.relay.pairing.action({action:'invite'});
+ await assert.rejects(f.exit.pairing.action({action:'connect',key:invite.key}),/已有名为中转一号的中转机，请更换命名/);
+ assert.match(f.exit.pairing.view().error,/已有名为/);assert.match(f.relay.pairing.view().error,/已有名为/);assert.equal(f.relay.pairing.view().pending,null);assert.equal(f.exit.calls.filter(c=>c.action==='configure-network').length,0);
+});
 async function fixture(t){
  let now=Date.now();const stores=[],directories=[];const target=new Map();
  const transport=async(invite,payload)=>{const node=target.get(new URL(invite.url).hostname);if(!node)throw new Error('unknown fixture');return node.machine(invite.token,payload);};

@@ -1,3 +1,5 @@
+import{fetchPanel}from'./ui-request.mjs';
+import{firstUserGuide}from'./ui-first-user.mjs';
 import{updateControls as renderUpdateControls,updateReminder,showUpdating,checkUpdateGate,showUpdatePrompt,installUpdateChecks}from'./ui-updates.mjs';
 import{serviceSettings}from'./ui-service-settings.mjs';
 import{renderOnboarding}from'./ui-onboarding.mjs';
@@ -24,8 +26,7 @@ const role = () => state.meta?.role === 'exit' ? '出口机' : '中转机';
 function toast(message,owner,kind='success') { if(!root.dataset.updating&&!state.mandatoryUpdate)actionFeedback(owner,message,{kind}); }
 async function api(path, { method='GET',data } = {}) {
   const sentCsrf=state.csrf;
-  const controller=new AbortController(),deadline=setTimeout(()=>controller.abort(),20000);
-  let response;try{response=await fetch(`${base}api/${path}`,{ method,signal:controller.signal,credentials:'same-origin',headers:{ ...(data?{'Content-Type':'application/json'}:{}),...(state.csrf?{'X-CSRF-Token':state.csrf}:{}) },body:data?JSON.stringify(data):undefined });}catch(error){throw new Error(controller.signal.aborted?(method==='GET'?'获取数据超时，请稍后重试。':'请求超时，操作可能仍在后台执行；请先更新数据确认状态，避免重复提交。'):'面板暂时不可用，可能正在重启；请稍后重试。');}finally{clearTimeout(deadline);}
+  const response=await fetchPanel(`${base}api/${path}`,{method,data,csrf:state.csrf});
   const result=await response.json();
   if(result.mandatoryUpdate){state.mandatoryUpdate=result.update;showUpdatePrompt(ctx,result.update);const error=new Error(result.error);error.mandatory=true;throw error;}
   if(result.updating){showUpdating(root);const error=new Error('升级中，请等待');error.updating=true;throw error;}
@@ -271,10 +272,10 @@ async function render(){
  else if(state.page==='help')helpPage(stage,ctx);
  if(renderId!==state.renderId||!state.csrf)return;
  const tools=root.querySelector('#page-refresh-tools');let slot=stage.querySelector('[data-refresh-slot]');if(!slot){let intro=stage.querySelector('.section-intro');if(!intro){intro=document.createElement('div');intro.className='section-intro';const text=document.createElement('h2');text.textContent=names[state.page];intro.append(text);stage.prepend(intro);}slot=document.createElement('div');slot.dataset.refreshSlot='';slot.dataset.preserve='';intro.append(slot);}if(tools)slot.append(tools);
- root.querySelector('#page').replaceWith(stage);enhanceForms(stage);stampRefresh();if(root.querySelector('.sidebar'))queueMicrotask(()=>updateReminder(ctx));
+ root.querySelector('#page').replaceWith(stage);enhanceForms(stage);stampRefresh();if(root.querySelector('.sidebar'))queueMicrotask(async()=>{try{await firstUserGuide(ctx);if(!document.querySelector('dialog[open]'))await updateReminder(ctx);}catch{}});
  }catch(error){if(renderId===state.renderId)toast(error.message,undefined,'error');throw error;}
 }
-function stampRefresh(error=false){const node=root.querySelector('#refresh-state');if(node){node.classList.toggle('stale',error);node.innerHTML='<i></i>'+(error?'暂未连通 · 保留上次数据':'更新于 '+new Date().toLocaleTimeString('zh-CN',{hour12:false}));}}
+function stampRefresh(error=false){const node=root.querySelector('#refresh-state');if(node){node.classList.toggle('stale',error);node.innerHTML='<i></i>'+(error?'正在重新连接…':'更新于 '+new Date().toLocaleTimeString('zh-CN',{hour12:false}));}}
 let refreshing=false;
 async function refreshCurrent(manual=false){
  if(!state.csrf)return;if(refreshing)return;refreshing=true;
