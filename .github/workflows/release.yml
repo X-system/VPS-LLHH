@@ -53,4 +53,5 @@ jobs:
         env:
           GH_RELEASE_TOKEN: ${{ github.token }}
           LLHH_ROLLING_INSTALLER: "1"
+          LLHH_REFRESH_BOOTSTRAP: "1"
         run: python3 scripts/publish_release.py

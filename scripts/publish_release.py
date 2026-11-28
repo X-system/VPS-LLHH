@@ -68,6 +68,13 @@ def main():
                 if policy.get('required')is True and role in policy.get('roles',['relay','exit']):body['body']+='\n\n<!-- llhh:update-policy {"required":true} -->'
             _,release=request(api+'/releases','POST',json.dumps(body).encode())
         if not release['draft']:
+            if root==ROOT and os.environ.get('LLHH_REFRESH_BOOTSTRAP')=='1':
+                upload(release,installer_files,rolling=True)
+                notes=release_notes(root,version)
+                # Keep an existing required-update marker when refreshing public notes.
+                markers=re.findall(r'<!-- llhh:update-policy [^\n]*? -->',release.get('body',''))
+                if markers:notes+='\n\n'+'\n'.join(markers)
+                if notes!=release.get('body'):request(api+'/releases/'+str(release['id']),'PATCH',json.dumps({'body':notes}).encode())
             print(tag+' already published; immutable program release retained.');return
         if release.get('target_commitish')!=commit:raise RuntimeError('Draft belongs to another commit; inspect before resuming')
         files={name:(root/'dist'/name).read_bytes()for name in ['vps-panel-'+version+'.tar.gz','vps-panel-'+version+'.tar.gz.sha256']}

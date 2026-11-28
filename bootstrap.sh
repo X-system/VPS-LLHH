@@ -17,19 +17,27 @@ if ! declare -F llhh_environment >/dev/null;then
  source "$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)/config/install-environment.sh"
 fi
 llhh_environment ca-certificates curl python3
+INTERACTIVE=0
+heading(){ printf "\n----------------------------------------\n  %s\n----------------------------------------\n" "$1"; }
+ask(){
+ [[ -r /dev/tty ]] || llhh_stop '没有可交互终端；无人值守请指定--role和--version。'
+ printf '%s' "$2" >/dev/tty
+ if ! IFS= read -r "$1" </dev/tty;then llhh_stop '输入已中断。没有继续安装，可重新执行原命令。';fi
+}
+heading 'LLHH 安装向导'
+printf '  环境检查已通过，接下来选择角色和版本。\n'
 if [[ -z $INSTALL_ROLE ]];then
- echo '请选择安装面板：'
- echo '  1. 中转端'
- echo '  2. 出口端'
- echo '  总控端：尚未开发，暂不可安装'
- [[ -r /dev/tty ]] || { echo '无人值守安装请指定 --role relay 或 --role exit。';exit 1; }
+ INTERACTIVE=1
+ heading '第1步 / 3  选择服务器角色'
+ printf '  1) 中转端  接入用户，直出或连接ATT出口\n  2) 出口端  接收中转机流量并提供出口\n\n  总控端暂未开放安装。\n\n'
  while true;do
-  read -r ROLE_CHOICE </dev/tty
-  case "$ROLE_CHOICE" in 1)INSTALL_ROLE=relay;break;;2)INSTALL_ROLE=exit;break;;*)echo '请输入 1 或 2：';;esac
+  ask ROLE_CHOICE '请输入 [1-2]：'
+  case "$ROLE_CHOICE" in 1)INSTALL_ROLE=relay;break;;2)INSTALL_ROLE=exit;break;;*)printf '输入无效，请输入数字1或2。\n';;esac
  done
 fi
-[[ $INSTALL_ROLE == relay ]] && echo '当前选择：中转端' || echo '当前选择：出口端'
-echo '安装版本：'
+ROLE_LABEL='中转端';[[ $INSTALL_ROLE != exit ]] || ROLE_LABEL='出口端'
+printf '\n已选择：%s\n' "$ROLE_LABEL"
+heading '第2步 / 3  选择安装版本'
 STAGE=$(mktemp -d /var/tmp/vps-panel-bootstrap.XXXXXXXX)
 cleanup(){ if [[ $STAGE == /var/tmp/vps-panel-bootstrap.* && -d $STAGE && ! -L $STAGE ]];then rm -rf -- "$STAGE";fi; }
 trap cleanup EXIT
@@ -56,13 +64,14 @@ if not found:raise RuntimeError('暂时没有可安装的发布版本，请稍�
 # A stable release follows every test build of the same base version.
 items=sorted(found.values(),key=lambda a:(*a['sort'][:3],a['sort'][4],a['sort'][3]))
 with open(sys.argv[2],'w')as output:json.dump(items,output)
-for i,item in enumerate(items,1):print(str(i)+'. '+item['label'])
+for i,item in enumerate(items,1):print('  '+str(i)+') '+item['label'])
 CATALOG
 if [[ -z $VERSION ]];then
- echo '请选择安装版本（输入序号）：'
+ INTERACTIVE=1
+ printf '\n请从上方列表选择版本，带（测试版）的为测试版本。\n'
  [[ -r /dev/tty ]] || { echo '无人值守安装请通过 --version v0.2.0-test1 指定版本。';exit 1; }
  while true;do
-  read -r CHOICE </dev/tty
+  ask CHOICE '请输入版本序号：'
   if [[ $CHOICE =~ ^[1-9][0-9]{0,3}$ ]];then
    VERSION=$(python3 -c 'import json,sys;items=json.load(open(sys.argv[1]));n=int(sys.argv[2]);print(items[n-1]["tag"]if 0<n<=len(items)else "")' "$STAGE/versions.json" "$CHOICE")
    [[ -z $VERSION ]] || break
@@ -78,6 +87,15 @@ if path.exists():
  assert not path.is_symlink(),'安装目录不安全'
  assert json.loads(path.read_text())['version']==sys.argv[1][1:],'已安装其他版本。安装器不会覆盖或降级现有面板，请使用面板更新；需要切换到旧版时先卸载并使用空白数据目录。'
 EXISTING
+heading '第3步 / 3  确认安装'
+printf '  服务器角色：%s\n  安装版本：%s\n  安装方式：自动检查环境、安装依赖并验证管理服务\n' "$ROLE_LABEL" "${VERSION#v}"
+if [[ $INTERACTIVE == 1 ]];then
+ printf '\n  1) 确认并开始安装\n  0) 取消，不继续安装\n\n'
+ while true;do
+  ask CONFIRM '请输入 [1/0]：'
+  case "$CONFIRM" in 1)break;;0)printf '\n已取消，没有继续安装面板。\n';exit 0;;*)printf '输入无效，请输入1或0。\n';;esac
+ done
+fi
 ASSET="vps-panel-$VERSION.tar.gz"
 BASE="https://github.com/$REPOSITORY/releases/download/$INSTALL_ROLE-$VERSION"
 llhh_step '下载并验证安装包'
@@ -118,3 +136,17 @@ llhh_step '安装面板与后台服务'
 bash "$STAGE/source/install.sh" --source "$STAGE/source" "${INSTALL_ARGS[@]}"
 printf '%s\n' "$REPOSITORY" >/etc/vps-panel/repository
 chmod 600 /etc/vps-panel/repository
+
+llhh_step '最终验收：检查管理服务和HTTPS入口'
+for unit in agent web auth worker;do
+ systemctl is-active --quiet "vps-panel-$unit.service"
+done
+/usr/local/lib/vps-panel/runtime/bin/node --input-type=module - <<'CHECK'
+import{managementHealth}from'/usr/local/lib/vps-panel/app/src/management-health.mjs';
+await managementHealth({attempts:30});
+CHECK
+heading 'LLHH 安装完成 · 管理服务验收通过'
+printf '  服务器角色：%s\n  安装版本：%s\n\n  [通过] 管理器、网页、认证与采集后台已运行\n  [通过] HTTPS、管理入口与访问响应检查\n\n' "$ROLE_LABEL" "${VERSION#v}"
+printf '面板地址：\n'
+vps-panel address
+printf '\n下一步：打开上面的地址，按网页引导设置账号、证书与配对。\n首次设置链接和备用临时凭证请查看上方输出，请勿转发。\n代理线路请在网页内完成配置后确认开启。\nSSH备用管理：vps-panel\n'
