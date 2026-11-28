@@ -84,7 +84,11 @@ def main():
                     if old!=commit:
                         archive_tag='archive/'+tag+'-'+old[:12]
                         archived,_=request(api+'/git/ref/tags/'+urllib.parse.quote(archive_tag,safe=''))
-                        if archived==404:request(api+'/git/refs','POST',json.dumps({'ref':'refs/tags/'+archive_tag,'sha':old}).encode())
+                        if archived==404:
+                            branch_status,branch=request(api+'/git/ref/heads/'+urllib.parse.quote(archive_tag,safe=''))
+                            if branch_status==200:
+                                if branch['object']['sha']!=old:raise RuntimeError('Archive branch points to another source commit')
+                            else:request(api+'/git/refs','POST',json.dumps({'ref':'refs/tags/'+archive_tag,'sha':old}).encode())
                 request(api+'/releases/'+str(release['id']),'PATCH',json.dumps({'draft':True,'target_commitish':commit}).encode())
                 for asset in release.get('assets',[]):
                     if asset['name']in(package_name,package_name+'.sha256'):

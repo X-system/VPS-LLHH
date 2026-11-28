@@ -20,6 +20,7 @@ class Opener:
             key=path.split('/git/ref/tags/')[1]
             if key not in refs:raise urllib.error.HTTPError(req.full_url,404,'missing',{},None)
             return Response({'object':{'type':'commit','sha':refs[key]}})
+        if '/git/ref/heads/'in path:raise urllib.error.HTTPError(req.full_url,404,'missing',{},None)
         if path.endswith('/git/refs'):
             assert method=='POST';refs[body['ref'].removeprefix('refs/tags/')]=body['sha'];return Response({})
         if '/git/refs/tags/'in path:
@@ -45,3 +46,4 @@ for r in releases.values():
     assert refs['archive/'+r['tag_name']+'-'+old[:12]]==old
     assert len([a for a in r['assets']if a['name'].startswith('archive-')])==2
 print(json.dumps({'oldSourceAndProgramsPreserved':True,'newPackageAndTagConsistent':True}))
+
