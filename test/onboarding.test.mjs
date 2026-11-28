@@ -27,6 +27,7 @@ test('首次引导逐步保存；TCP直出不出现证书要求，不要求WG，
 });
 test('保存步骤可恢复，证书令牌不出现在进度中；未配对不能继续开启ATT',async t=>{
  const f=await fixture(t);await f.flow.advance({step:'account',username:'admin-new',password:'new-test-password'});await f.flow.advance({step:'name',serverName:'Hy2测试'});await f.flow.advance({step:'protocols',protocols:['hy2']});
+ await assert.rejects(f.flow.advance({step:'certificate',check:true}),/尚未取得有效证书/);assert.equal(f.flow.view().step,'certificate');
  const token='isolated-cloudflare-token-12345';await f.flow.advance({step:'certificate',domain:'relay.example.test',token,zoneId:'a'.repeat(32),email:'test@example.test',termsAccepted:true});
  assert.ok(!JSON.stringify(f.flow.view()).includes(token));assert.ok(!JSON.stringify(f.store.get('onboarding')).includes(token));assert.equal(f.flow.view().step,'certificate');
  await f.flow.advance({step:'certificate',check:true});await f.flow.advance({step:'bark',skip:true});
