@@ -4,7 +4,7 @@ root=pathlib.Path(sys.argv[1]if len(sys.argv)>1 else pathlib.Path(__file__).reso
 source=(root/'bootstrap.sh').read_text()
 with tempfile.TemporaryDirectory(prefix='llhh-menu-')as temporary:
     path=pathlib.Path(temporary);(path/'versions.json').write_text('[{"tag":"v0.3.3-test1"}]')
-    code='set -Eeuo pipefail\nINSTALL_ROLE=""\nVERSION=""\nllhh_stop(){ echo "$1";exit 1; }\n'
+    code='set -Eeuo pipefail\nINSTALL_ROLE=""\nVERSION=""\nllhh_stop(){ echo "$1";exit 1; }\nllhh_step(){ :; }\n'
     code+=source[source.index('INTERACTIVE=0'):source.index('STAGE=$(mktemp')]
     code+='STAGE='+str(path)+'\nprintf "  1) 0.3.3-test1（测试版）\\n"\n'
     code+=source[source.index('if [[ -z $VERSION ]];then'):source.index('EXPECTED=$(python3')]

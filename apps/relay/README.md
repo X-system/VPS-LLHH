@@ -4,6 +4,7 @@
 
 | 固定版本 | 状态 | 发布包 / 安装说明 | 固定源码 |
 | --- | --- | --- | --- |
+| 0.3.3-test2 | 当前可安装测试版，修复系统版本覆盖安装版本 | [Release](https://github.com/X-system/VPS-LLHH/releases/tag/relay-v0.3.3-test2) | [查看源码](https://github.com/X-system/VPS-LLHH/tree/relay-v0.3.3-test2) |
 | 0.3.3-test1 | 测试版，安装入口自检、补依赖与中文失败提示 | [Release](https://github.com/X-system/VPS-LLHH/releases/tag/relay-v0.3.3-test1) | [查看源码](https://github.com/X-system/VPS-LLHH/tree/relay-v0.3.3-test1) |
 | 0.3.2 | 修复监控比例、补齐界面文字调整 | [Release](https://github.com/X-system/VPS-LLHH/releases/tag/relay-v0.3.2) | [查看源码](https://github.com/X-system/VPS-LLHH/tree/relay-v0.3.2) |
 | 0.3.1 | 界面文字与布局优化、更新说明与状态提醒 | [Release](https://github.com/X-system/VPS-LLHH/releases/tag/relay-v0.3.1) | [查看源码](https://github.com/X-system/VPS-LLHH/tree/relay-v0.3.1) |
@@ -12,6 +13,8 @@
 | 0.2.0-test1 | 历史测试版 | [Release](https://github.com/X-system/VPS-LLHH/releases/tag/relay-v0.2.0-test1) | [查看源码](https://github.com/X-system/VPS-LLHH/tree/relay-v0.2.0-test1) |
 | 0.1.0-test1 | 历史测试版，保留第一版功能 | [Release](https://github.com/X-system/VPS-LLHH/releases/tag/relay-v0.1.0-test1) | [查看源码](https://github.com/X-system/VPS-LLHH/tree/relay-v0.1.0-test1) |
 
-运行[首页的一行安装命令](../../README.md)，先选“中转端”，再选版本。无人值守可在下载后的 bootstrap.sh 传入 `--role relay --version v0.3.3-test1`。版本不会与另一种面板混在同一菜单中；安装器不会覆盖已安装的其他版本或角色。
+运行[首页的一行安装命令](../../README.md)，先选“中转端”，再选版本。无人值守可在下载后的 bootstrap.sh 传入 `--role relay --version v0.3.3-test2`。版本不会与另一种面板混在同一菜单中；安装器不会覆盖已安装的其他版本或角色。
 
 [返回首页](../../README.md) · [版本管理规则](../../docs/versioning.md)
+
+历史源码与标签保留，当前安装菜单仅提供0.3.3-test2。

@@ -7,7 +7,7 @@ with tempfile.TemporaryDirectory(prefix='llhh-entry-fixture-')as temporary:
     for source,cases in [('config/install-environment.sh',['missing','ready','apt-failed','unsupported','space']),('config/install-entry.sh',['missing','ready','apt-failed','unsupported','download-failed'])]:
         for case in cases:
             path=base/(source.split('/')[-1]+case);path.mkdir();binary=path/'bin';binary.mkdir();(path/'systemd').mkdir()
-            (path/'os-release').write_text('ID='+('ubuntu'if case=='unsupported'else'debian')+'\nVERSION_ID=12\n')
+            (path/'os-release').write_text('ID='+('ubuntu'if case=='unsupported'else'debian')+'\nVERSION_ID=12\nVERSION="12 (bookworm)"\n')
             if case=='ready':(path/'ready').touch();(path/'ca').write_text('fixture')
             scripts={
                 'apt-get':'''#!/bin/bash
@@ -26,7 +26,7 @@ printf '#!/bin/bash\necho child-ran >>"$FIXTURE/calls"\n' >"$target"
             for name,body in scripts.items():file=binary/name;file.write_text(body);file.chmod(0o755)
             code=(root/source).read_text().replace('/etc/os-release',str(path/'os-release')).replace('/run/systemd/system',str(path/'systemd')).replace('/etc/ssl/certs/ca-certificates.crt',str(path/'ca')).replace('/var/tmp/llhh-entry.',str(path/'download.')).replace('[[ $EUID == 0 ]]','[[ 0 == 0 ]]')
             prefix='command(){ if [[ $1 == -v && $2 == curl && ! -e $FIXTURE/ready ]];then return 1;fi;builtin command "$@"; };\n'
-            code=code.replace('set -Eeuo pipefail','set -Eeuo pipefail\n'+prefix)if 'set -Eeuo pipefail'in code else 'set -Eeuo pipefail\n'+prefix+code+'\nllhh_environment ca-certificates curl python3\n'
+            code=code.replace('set -Eeuo pipefail','set -Eeuo pipefail\n'+prefix)if 'set -Eeuo pipefail'in code else 'set -Eeuo pipefail\n'+prefix+code+'\nVERSION=target-version\nllhh_environment ca-certificates curl python3\n[[ $VERSION == target-version ]] || exit 99\n'
             script=path/'test.sh';script.write_text(code)
             env={**os.environ,'FIXTURE':str(path),'CASE':case,'PATH':str(binary)+':'+os.environ['PATH'],'SPACE':'100'if case=='space'else'9999999'}
             result=subprocess.run(['bash',str(script)],text=True,capture_output=True,env=env,timeout=15)

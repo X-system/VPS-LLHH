@@ -2,7 +2,7 @@
 LLHH_STEP='检查安装环境'
 llhh_step(){ LLHH_STEP=$1; printf '\n[LLHH] %s\n' "$LLHH_STEP"; }
 llhh_stop(){ printf '\n[LLHH] 无法继续：%s\n' "$1" >&2; exit 1; }
-llhh_error(){ local code=$1; trap - ERR; printf '\n[LLHH] 安装未完成（退出码 %s）\n失败步骤：%s\n' "$code" "$LLHH_STEP" >&2; case "$LLHH_STEP" in
+llhh_error(){ local code=$1; if ((BASH_SUBSHELL>0));then exit "$code";fi; trap - ERR; printf '\n[LLHH] 安装未完成（退出码 %s）\n失败步骤：%s\n' "$code" "$LLHH_STEP" >&2; case "$LLHH_STEP" in
  *软件源*) echo '请检查服务器联网、DNS和Debian软件源。软件源未就绪，没有继续安装。' >&2;;
  *依赖*) echo '请检查上方的软件包错误和可用空间。其他安装程序占用时最多等待120秒，不强杀进程或删除锁文件。' >&2;;
  *下载*|*版本*) echo '请检查服务器时间、DNS及到GitHub的HTTPS连接；不会跳过证书校验或运行未完整下载的脚本。' >&2;;
@@ -15,7 +15,7 @@ llhh_environment(){
  [[ $EUID == 0 ]] || llhh_stop '请使用root登录后运行。'
  [[ $(uname -s) == Linux && $(uname -m) == x86_64 ]] || llhh_stop '目前只支持Linux amd64，请选择Debian 12 amd64。'
  [[ -r /etc/os-release ]] || llhh_stop '无法识别系统，请使用Debian 12。'
- local ID VERSION_ID; source /etc/os-release
+ local ID VERSION_ID VERSION NAME PRETTY_NAME VERSION_CODENAME HOME_URL SUPPORT_URL BUG_REPORT_URL; source /etc/os-release
  [[ $ID == debian && ( $VERSION_ID == 12 || ( $VERSION_ID == 13 && ${VPS_INSTALL_TEST_DEBIAN13:-0} == 1 ) ) ]] || llhh_stop "当前系统为${ID:-未知} ${VERSION_ID:-未知}，目前只开放Debian 12。"
  command -v apt-get >/dev/null || llhh_stop '系统缺少apt-get，无法自动补齐组件。'
  command -v systemctl >/dev/null && [[ -d /run/systemd/system ]] || llhh_stop '系统未运行systemd，无法管理后台服务。'

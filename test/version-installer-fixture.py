@@ -15,6 +15,9 @@ with tempfile.TemporaryDirectory()as temporary:
  assert [x['tag']for x in json.loads(catalog.read_text())]==['v0.1.0-test1','v0.2.0-test1','v0.2.0-test2','v0.2.0-test10','v0.2.0']
  with patch.object(sys,'argv',['fixture','example/panel',str(catalog),'exit']),patch('urllib.request.urlopen',return_value=Response()):exec(compile(block('CATALOG'),'catalog','exec'),{})
  assert [x['label']for x in json.loads(catalog.read_text())]==['0.5.0']
+ with patch.object(sys,'argv',['fixture','example/panel',str(catalog),'relay','["v0.2.0-test2"]']),patch('urllib.request.urlopen',return_value=Response()):exec(compile(block('CATALOG'),'catalog','exec'),{})
+ assert [x['tag']for x in json.loads(catalog.read_text())]==['v0.2.0-test2']
+
  archive=root/'package.tar.gz';data=b'{"version":"0.1.0-test1"}';manifest={'format':'vps-panel-release','version':'0.1.0-test1','schemaVersion':1,'files':{'package.json':hashlib.sha256(data).hexdigest()}}
  def pack(evil=False):
   with tarfile.open(archive,'w:gz')as tar:

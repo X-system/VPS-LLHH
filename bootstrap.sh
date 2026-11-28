@@ -3,6 +3,7 @@ set -Eeuo pipefail
 umask 077
 REPOSITORY=''
 VERSION=''
+INSTALLABLE_VERSIONS='["v0.3.3-test2"]'
 RESTORE=0
 INSTALL_ROLE=''
 while [[ $# -gt 0 ]]; do
@@ -42,9 +43,9 @@ STAGE=$(mktemp -d /var/tmp/vps-panel-bootstrap.XXXXXXXX)
 cleanup(){ if [[ $STAGE == /var/tmp/vps-panel-bootstrap.* && -d $STAGE && ! -L $STAGE ]];then rm -rf -- "$STAGE";fi; }
 trap cleanup EXIT
 llhh_step '获取可安装版本列表'
-python3 - "$REPOSITORY" "$STAGE/versions.json" "$INSTALL_ROLE" <<'CATALOG'
+python3 - "$REPOSITORY" "$STAGE/versions.json" "$INSTALL_ROLE" "$INSTALLABLE_VERSIONS" <<'CATALOG'
 import sys,json,re,urllib.request
-repo=sys.argv[1];role=sys.argv[3];found={}
+repo=sys.argv[1];role=sys.argv[3];found={};allowed=json.loads(sys.argv[4])if len(sys.argv)>4 else None
 pattern=r'v(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-test([1-9]\d*))?'
 for page in range(1,11):
  req=urllib.request.Request('https://api.github.com/repos/'+repo+'/releases?per_page=100&page='+str(page),headers={'User-Agent':'VPS-LLHH-installer','Accept':'application/vnd.github+json'})
@@ -52,6 +53,7 @@ for page in range(1,11):
  if not isinstance(releases,list):raise RuntimeError('发布列表格式错误')
  for release in releases:
   tag=release.get('tag_name','');prefix=role+'-';version_tag=tag[len(prefix):]if tag.startswith(prefix)else '';match=re.fullmatch(pattern,version_tag)
+  if allowed is not None and version_tag not in allowed:continue
   if not match or release.get('draft')or '<!-- llhh:installer -->'in(release.get('body')or ''):continue
   test=match[4]is not None
   if bool(release.get('prerelease'))!=test:continue
@@ -79,7 +81,9 @@ if [[ -z $VERSION ]];then
   echo '序号无效，请重新输入：'
  done
 fi
-EXPECTED=$(python3 -c 'import json,sys;items=json.load(open(sys.argv[1]));item=next((a for a in items if a["tag"]==sys.argv[2]),None);assert item,"此版本尚未发布或发布包校验信息不完整";print(item["sha256"])' "$STAGE/versions.json" "$VERSION")
+llhh_step '验证所选安装版本'
+EXPECTED=$(python3 -c 'import json,sys;items=json.load(open(sys.argv[1]));item=next((a for a in items if a["tag"]==sys.argv[2]),None);print(item["sha256"]if item else "")' "$STAGE/versions.json" "$VERSION")
+[[ $EXPECTED =~ ^[a-f0-9]{64}$ ]] || llhh_stop '所选版本当前不提供安装，或发布校验信息不完整，请重新运行选择可安装版本。'
 python3 - "$VERSION" <<'EXISTING'
 import sys,json,pathlib
 path=pathlib.Path('/usr/local/lib/vps-panel/app/package.json')
