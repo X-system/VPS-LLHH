@@ -1,92 +1,68 @@
-# VPS-LLHH · 流量来来回回
+# VPS-LLHH �� ���������ػ�
 
-支持中转机与出口机两种角色，入口协议限定为 VMess 原始 TCP 与 Hysteria2。
+֧����ת������ڻ����ֽ�ɫ�����Э���޶�Ϊ VMess ԭʼ TCP �� Hysteria2��
 
-**当前版本 0.3.3-test1（测试版）。安装环境为 Debian 12 amd64；其他系统尚未开放安装。**
+**��ǰ�汾 0.3.3-test1�����԰棩����װ����Ϊ Debian 12 amd64������ϵͳ��δ���Ű�װ��**
 
-运行数据、登录凭证、私钥和实际运维报告不进入代码仓库。面板仍处于测试阶段，请先在可重装的测试VPS上验收。
+�������ݡ���¼ƾ֤��˽Կ��ʵ����ά���治�������ֿ⡣����Դ��ڲ��Խ׶Σ������ڿ���װ�Ĳ���VPS�����ա�
 
-## 选择你需要的面板
+## ѡ������Ҫ�����
 
-| 面板 | 负责什么 | 独立版本与说明 | 状态 |
+| ��� | ����ʲô | �����汾��˵�� | ״̬ |
 | --- | --- | --- | --- |
-| **中转端** | 用户、订阅、直出和连接出口 | [中转端入口](apps/relay/README.md) · [版本发布](https://github.com/X-system/VPS-LLHH/releases?q=relay-) | 0.3.3-test1 测试版，保留旧版 |
-| **出口端** | 接收中转连接、提供出口 | [出口端入口](apps/exit/README.md) · [版本发布](https://github.com/X-system/VPS-LLHH/releases?q=exit-) | 0.3.3-test1 测试版，保留旧版 |
-| **总控端** | 未来统一管理用户和分配线路 | [总控端入口](apps/controller/README.md) | 尚未开发，不能安装 |
+| **��ת��** | �û������ġ�ֱ�������ӳ��� | [��ת�����](apps/relay/README.md) �� [�汾����](https://github.com/X-system/VPS-LLHH/releases?q=relay-) | 0.3.3-test1 ���԰棬�����ɰ� |
+| **���ڶ�** | ������ת���ӡ��ṩ���� | [���ڶ����](apps/exit/README.md) �� [�汾����](https://github.com/X-system/VPS-LLHH/releases?q=exit-) | 0.3.3-test1 ���԰棬�����ɰ� |
+| **�ܿض�** | δ��ͳһ�����û��ͷ�����· | [�ܿض����](apps/controller/README.md) | ��δ���������ܰ�װ |
 
-**一条安装命令 → 选择面板 → 选择该面板的版本 → 自动安装。** 固定版本看 Release / Tag，main 是开发代码。中转和出口共享底层程序，但按角色分别发布，避免混淆。
+**һ����װ���� �� ѡ����� �� ѡ������İ汾 �� �Զ���װ��** �̶��汾�� Release / Tag��main �ǿ������롣��ת�ͳ��ڹ����ײ���򣬵�����ɫ�ֱ𷢲������������
 
-## 本地开发
+## ���ؿ���
 
-需要 Node.js 24。使用内置 HTTP、SQLite 与密码学模块，不需要数据库服务。
+��Ҫ Node.js 24��ʹ������ HTTP��SQLite ������ѧģ�飬����Ҫ���ݿ����
 
 ```sh
 npm ci
 npm run check
 npm test
 npm start
-# 在另一个终端查看入口
+# ����һ���ն˲鿴���
 node src/cli.mjs address
 ```
 
-首次启动会生成随机管理员密码和强制随机入口。地址在本机终端显示；首次凭证保存在运行目录的 `.bootstrap.json`（0600权限），不写入服务日志。默认仅监听 `127.0.0.1:18443`，本地开发使用 HTTP；生产部署必须配置 HTTPS。运行数据存放于忽略提交的 `data/`。
+�״������������������Ա�����ǿ�������ڡ���ַ�ڱ����ն���ʾ���״�ƾ֤����������Ŀ¼�� `.bootstrap.json`��0600Ȩ�ޣ�����д�������־��Ĭ�Ͻ����� `127.0.0.1:18443`�����ؿ���ʹ�� HTTP����������������� HTTPS���������ݴ���ں����ύ�� `data/`��
 
-## Linux安装与维护
+## Linux��װ��ά��
 
-当前安装器开放Debian12 amd64；Debian13尚未开放正式安装。安装会校验固定版本的Node、Xray及Hysteria下载，创建独立账户与系统服务，自动检查WG和防火墙能力。安装完成只启动管理服务，代理保持停止。
+��ǰ��װ������Debian12 amd64��Debian13��δ������ʽ��װ����װ��У��̶��汾��Node��Xray��Hysteria���أ����������˻���ϵͳ�����Զ����WG�ͷ���ǽ��������װ���ֻ�����������񣬴�������ֹͣ��
 
-以root登录Debian12 amd64，执行这一条命令：
+��root��¼Debian12 amd64��ִ����һ�����
 
 ```sh
-bash -c 'set -Eeuo pipefail
-step="检查安装入口"
-entry_error(){ code=$?; printf "\n[LLHH] 无法继续：%s（退出码 %s）。请查看上方错误。\n" "$step" "$code" >&2; exit "$code"; }
-trap entry_error ERR
-[[ $EUID == 0 ]] || { echo "[LLHH] 请使用root登录后运行。"; exit 1; }
-[[ -r /etc/os-release ]] || { echo "[LLHH] 无法识别系统，请使用Debian 12 amd64。"; exit 1; }
-source /etc/os-release
-[[ $ID == debian && $VERSION_ID == 12 && $(uname -m) == x86_64 ]] || { echo "[LLHH] 当前只支持Debian 12 amd64，已停止，未修改软件源。"; exit 1; }
-step="准备下载组件：检查软件源、服务器联网及可用空间"
-if ! command -v curl >/dev/null || ! command -v python3 >/dev/null || [[ ! -s /etc/ssl/certs/ca-certificates.crt ]];then
- echo "[LLHH] 正在自动安装下载组件和CA证书，请等待；软件包锁最多等待120秒。"
- export DEBIAN_FRONTEND=noninteractive
- apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=20 -o Acquire::https::Timeout=20 -o DPkg::Lock::Timeout=120 update --error-on=any
- apt-get -o DPkg::Lock::Timeout=120 -o Acquire::Retries=3 --no-remove install -y --no-install-recommends ca-certificates curl python3
-fi
-command -v curl >/dev/null && command -v python3 >/dev/null && [[ -s /etc/ssl/certs/ca-certificates.crt ]] || { echo "[LLHH] 下载组件安装后检查失败，请保留上方软件包错误信息。"; exit 1; }
-step="下载LLHH引导：请检查DNS、时间和到GitHub的HTTPS连接"
-file=$(mktemp /var/tmp/llhh-entry.XXXXXXXX)
-cleanup(){ rm -f -- "$file"; }; trap cleanup EXIT
-curl --proto "=https" --tlsv1.2 -fsSL --retry 3 --connect-timeout 15 --max-time 180 https://github.com/X-system/VPS-LLHH/releases/download/v0.2.0/bootstrap.sh -o "$file"
-[[ -s $file ]] || { echo "[LLHH] 下载结果为空，没有执行安装。"; exit 1; }
-step="检查下载脚本完整性"
-bash -n "$file"
-step="运行LLHH安装引导"
-bash "$file"'
+apt-get update && apt-get install -y curl ca-certificates && f=$(mktemp) && curl -fsSL --retry 3 https://github.com/X-system/VPS-LLHH/releases/download/v0.2.0/bootstrap.sh -o "$f" && bash "$f"
 ```
 
-安装时选择：`1` 中转端，或 `2` 出口端。安装完成后打开终端显示的一次性设置链接，继续网页引导。首次通过IP访问会使用自签证书，浏览器可能提示证书未受信任；先核对服务器地址。
+��װʱѡ��`1` ��ת�ˣ��� `2` ���ڶˡ���װ��ɺ���ն���ʾ��һ�����������ӣ�������ҳ�������״�ͨ��IP���ʻ�ʹ����ǩ֤�飬�����������ʾ֤��δ�����Σ��Ⱥ˶Է�������ַ��
 
-也可使用已经取得并检查的完整源码目录安装，例如：
+Ҳ��ʹ���Ѿ�ȡ�ò���������Դ��Ŀ¼��װ�����磺
 
 ```sh
 bash /opt/vps-panel-source/install.sh --source /opt/vps-panel-source
 ```
 
-首次安装在终端选择中转端或出口端，也可加 `--role relay` 或 `--role exit`。安装结束会显示一次性首次设置链接和备用临时账户；打开链接，按中文引导依次设置账户、服务器名称、协议、证书、Bark和可选ATT配对，最后确认由程序自动配置、启动并检查。只用TCP直出无需域名或WG。首次HTTPS为自签证书，确认服务器地址后按浏览器提示继续。需要公网管理时安装器检测本机IPv4和可用端口；隔离测试可通过VPS_INSTALL_BIND=127.0.0.1与VPS_INSTALL_IP=127.0.0.1限制为回环访问。
+�״ΰ�װ���ն�ѡ����ת�˻���ڶˣ�Ҳ�ɼ� `--role relay` �� `--role exit`����װ��������ʾһ�����״��������Ӻͱ�����ʱ�˻��������ӣ��������������������˻������������ơ�Э�顢֤�顢Bark�Ϳ�ѡATT��ԣ����ȷ���ɳ����Զ����á���������顣ֻ��TCPֱ������������WG���״�HTTPSΪ��ǩ֤�飬ȷ�Ϸ�������ַ���������ʾ��������Ҫ��������ʱ��װ����Ȿ��IPv4�Ϳ��ö˿ڣ�������Կ�ͨ��VPS_INSTALL_BIND=127.0.0.1��VPS_INSTALL_IP=127.0.0.1����Ϊ�ػ����ʡ�
 
-SSH输入`vps-panel`打开应急菜单。停止和急停可绕过网页及本机管理器；修复网页可重置管理服务的启动失败限制。完整安装的重复执行不会覆盖配置；未完成安装可保留数据重新部署程序。
+SSH����`vps-panel`��Ӧ���˵���ֹͣ�ͼ�ͣ���ƹ���ҳ���������������޸���ҳ�����ù������������ʧ�����ơ�������װ���ظ�ִ�в��Ḳ�����ã�δ��ɰ�װ�ɱ����������²������
 
-卸载分为保留数据和清除数据。保留数据后恢复安装使用`install.sh --source /绝对源码目录 --restore`，沿用管理员、入口、用户和用量，代理保持急停；网页从恢复引导继续，不重复设置已有账户，重新确认配对和启动。
+ж�ط�Ϊ�������ݺ�������ݡ��������ݺ�ָ���װʹ��`install.sh --source /����Դ��Ŀ¼ --restore`�����ù���Ա����ڡ��û����������������ּ�ͣ����ҳ�ӻָ��������������ظ����������˻�������ȷ����Ժ�������
 
-安装命令先选择中转端或出口端，再列出该面板实际发布版本供选择，测试版标注“（测试版）”；选择后自动安装对应角色。无人值守可指定 `--version v0.3.3-test1 --role relay`。已装其他版本时不会覆盖或降级，更新请走面板。完整规则见 [版本管理](docs/versioning.md)。
+��װ������ѡ����ת�˻���ڶˣ����г������ʵ�ʷ����汾��ѡ�񣬲��԰��ע�������԰棩����ѡ����Զ���װ��Ӧ��ɫ������ֵ�ؿ�ָ�� `--version v0.3.3-test1 --role relay`����װ�����汾ʱ���Ḳ�ǻ򽵼�������������塣��������� [�汾����](docs/versioning.md)��
 
-网页支持面板版本更新及回滚，变更期间代理停止，自检失败自动恢复。当前不自动升级Node或协议核心二进制，遇到组件摘要变化会拒绝该版本。代码仓库：[X-system/VPS-LLHH](https://github.com/X-system/VPS-LLHH)。安装和在线更新使用[公开Release](https://github.com/X-system/VPS-LLHH/releases/latest)，安装包和脚本均附带SHA256校验文件。已在干净的Debian12中转测试机验证公网安装入口；正式使用前仍建议在自己的服务器验收。
+��ҳ֧�����汾���¼��ع�������ڼ����ֹͣ���Լ�ʧ���Զ��ָ�����ǰ���Զ�����Node��Э����Ķ����ƣ��������ժҪ�仯��ܾ��ð汾������ֿ⣺[X-system/VPS-LLHH](https://github.com/X-system/VPS-LLHH)����װ�����߸���ʹ��[����Release](https://github.com/X-system/VPS-LLHH/releases/latest)����װ���ͽű�������SHA256У���ļ������ڸɾ���Debian12��ת���Ի���֤������װ��ڣ���ʽʹ��ǰ�Խ������Լ��ķ��������ա�
 
-## 当前版本：0.3.3-test1（测试版）
+## ��ǰ�汾��0.3.3-test1�����԰棩
 
-安装入口先检查系统和权限，自动安装curl、Python3和CA证书，完整下载引导后再执行。安装器提前补齐依赖，检查systemd、空间、WG与防火墙能力，逐步显示进度和失败原因；软件包锁有限等待，不强杀进程、不删除锁文件、不绕过HTTPS校验。
+��װ����ȼ��ϵͳ��Ȩ�ޣ��Զ���װcurl��Python3��CA֤�飬����������������ִ�С���װ����ǰ�������������systemd���ռ䡢WG�����ǽ����������ʾ���Ⱥ�ʧ��ԭ�������������޵ȴ�����ǿɱ���̡���ɾ�����ļ������ƹ�HTTPSУ�顣
 
-上面的命令使用持续维护的安装入口（兼容入口标签v0.2.0，不代表安装0.2.0）。运行后选择面板及0.3.3-test1；旧版本不被覆盖。
+���������ʹ�ó���ά���İ�װ��ڣ�������ڱ�ǩv0.2.0����������װ0.2.0�������к�ѡ����弰0.3.3-test1���ɰ汾�������ǡ�
 
-完整变化见[0.3.3-test1发布说明](docs/releases/0.3.3-test1.md)。包含0.3.2全部功能和界面修复。总控端尚未开放安装。
+�����仯��[0.3.3-test1����˵��](docs/releases/0.3.3-test1.md)������0.3.2ȫ�����ܺͽ����޸����ܿض���δ���Ű�װ��
