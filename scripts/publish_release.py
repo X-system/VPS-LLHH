@@ -39,7 +39,9 @@ def main():
                 return response.status,json.load(response)if response.status!=204 else None
         except urllib.error.HTTPError as error:
             if error.code==404:return 404,None
-            raise RuntimeError('GitHub publication failed (HTTP '+str(error.code)+')')from None
+            try:message=json.loads(error.read()).get('message','')
+            except Exception:message=''
+            raise RuntimeError('GitHub publication failed (HTTP '+str(error.code)+') '+method+' '+urllib.parse.urlsplit(url).path+': '+str(message)[:240])from None
     api='https://api.github.com/repos/'+repository
     def upload(release,files,rolling=False):
         existing={item['name']:item for item in release.get('assets',[])}
@@ -140,3 +142,4 @@ def main():
 if __name__=='__main__':
     try:main()
     except Exception as error:print(str(error),file=sys.stderr);sys.exit(1)
+
