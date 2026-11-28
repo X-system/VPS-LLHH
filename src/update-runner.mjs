@@ -42,9 +42,10 @@ async function restoreIntent(){
 async function generateUnits(){
  await command(node,['--input-type=module','-e',`import{writeFileSync}from'node:fs';import{serviceUnits}from'/usr/local/lib/vps-panel/app/src/service-units.mjs';for(const[name,text]of Object.entries(serviceUnits()))writeFileSync('/etc/systemd/system/'+name,text,{mode:0o644});`]);
  await command('/usr/bin/systemctl',['daemon-reload']);
+ await command('/usr/bin/install',['-m','755',join(base,'app/config/vps-panel'),'/usr/local/bin/llhh']);
  await command('/usr/bin/install',['-m','755',join(base,'app/config/vps-panel'),'/usr/local/bin/vps-panel']);
 }
-async function startManagement(){await stopWait();await generateUnits();await command('/usr/bin/systemctl',['reset-failed',...units]);await command('/usr/bin/systemctl',['start',...units]);}
+async function startManagement(){await stopWait();await generateUnits();await command('/usr/bin/systemctl',['reset-failed',...units]);await command('/usr/bin/systemctl',['start',...units]);if(await readFile('/etc/vps-panel/certs/ip/status.json').then(()=>true).catch(()=>false))await command('/usr/bin/systemctl',['enable','--now','vps-panel-ip-certificate.timer']);}
 async function stopManagement(){await command('/usr/bin/systemctl',['stop',...units]);}
 async function snapshot(target){
  await mkdir(target,{recursive:true,mode:0o700});

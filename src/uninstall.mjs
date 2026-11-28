@@ -5,6 +5,7 @@ import{createSystemDriver}from'./system-driver.mjs';
 import{createFirewall}from'./firewall.mjs';
 import{serviceUnits}from'./service-units.mjs';
 import{ownsRouteRule}from'./network.mjs';
+import{removeInstallerArtifacts,removeProgramResidues}from'./owned-artifacts.mjs';
 
 if(process.platform!=='linux'||process.getuid()!==0)throw new Error('卸载程序只能由Linux的root运行');
 const mode=process.argv[2];if(!['--purge-data','--keep-data'].includes(mode))throw new Error('必须明确选择保留或清除数据');
@@ -40,7 +41,9 @@ for(const unit of Object.keys(serviceUnits())){
  await rm('/etc/systemd/system/'+unit+'.d',{recursive:true,force:true});
 }
 await run('/usr/bin/systemctl',['daemon-reload']);
+await unlink('/usr/local/bin/llhh').catch(error=>{if(error.code!=='ENOENT')throw error;});
 await unlink('/usr/local/bin/vps-panel').catch(error=>{if(error.code!=='ENOENT')throw error;});
+if(mode==='--purge-data'){await removeInstallerArtifacts();await removeProgramResidues();}
 // The running process has already loaded its code. Only fixed, verified roots are removed.
 await rm('/usr/local/lib/vps-panel',{recursive:true,force:true});
 if(mode==='--purge-data')for(const target of['/etc/vps-panel','/var/lib/vps-panel'])await rm(target,{recursive:true,force:true});
@@ -59,5 +62,5 @@ if(mode==='--purge-data'){
   try{const line=(await run('/usr/bin/getent',['group',name])).stdout.trim().split(':');if(Number(line[2])===account.gid&&!line[3])await run('/usr/sbin/groupdel',[name]);}catch(error){if(error.code!==2&&error.code!==6&&error.code!==8)throw error;}
  }
 }
-console.log(mode==='--purge-data'?'面板及运行数据已清除；系统共享依赖未删除。':'面板已卸载，账户与加密运行数据已保留；重新安装请使用--restore。');
+console.log(mode==='--purge-data'?'LLHH已彻底卸载：面板、账号、配置、证书、缓存和已登记安装脚本已清除；系统共享依赖及其他软件未删除。':'面板已卸载，账户与加密运行数据已保留；重新安装请使用--restore。');
 await unlink('/etc/vps-panel/maintenance.lock').catch(error=>{if(error.code!=='ENOENT')throw error;});

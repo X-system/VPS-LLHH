@@ -7,10 +7,10 @@ if [[ -f /etc/vps-panel/web.env ]]; then
  export VPS_ORIGIN
 fi
 if [[ $# == 0 ]]; then
- echo 'VPS 面板 SSH 应急菜单'
+ echo 'LLHH 面板 SSH 应急菜单'
  echo '1.查看状态  2.查看入口  3.重置入口  4.重置管理员'
  echo '5.停止所有线路  6.急停锁定  7.解除急停（不启动）'
- echo '8.检查更新  9.更新  10.回滚版本  11.卸载保留数据  12.卸载清除数据  13.修复网页服务  14.恢复IP访问'
+ echo '8.检查更新  9.更新  10.回滚版本  11.卸载保留数据  12.彻底卸载  13.修复网页服务  14.恢复IP访问'
  read -r -p '请选择：' choice
  case "$choice" in 1)set -- status;;2)set -- address;;3)set -- reset-entry;;4)set -- reset-password;;5)set -- stop-all;;6)set -- emergency-stop;;7)set -- release-emergency;;8)set -- check-update;;9)set -- update;;10)set -- rollback;;11)set -- uninstall-keep;;12)set -- uninstall-purge;;13)set -- recover-web;;14)set -- enable-ip-access;;*)exit 1;;esac
 fi

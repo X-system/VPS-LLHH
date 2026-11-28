@@ -161,7 +161,7 @@ export async function createApp(options = {}) {
       if(req.method==='POST'&&suffix==='api/bootstrap'){
         if(!loginLimiter.allow(req.socket.remoteAddress))throw new HttpError(429,'请求过于频繁，请稍后再试');
         const data=await body(req),access=store.get('bootstrap-access');
-        if(onboarding.view().step!=='account'||!access||access.expires<=store.clock()||typeof data.token!=='string'||!/^[A-Za-z0-9_-]{32,128}$/.test(data.token)||digest(data.token)!==access.hash)throw new HttpError(401,'首次设置链接已失效，请使用安装时的备用临时账户登录');
+        if(!['welcome','account'].includes(onboarding.view().step)||!access||access.expires<=store.clock()||typeof data.token!=='string'||!/^[A-Za-z0-9_-]{32,128}$/.test(data.token)||digest(data.token)!==access.hash)throw new HttpError(401,'首次激活链接已失效，请在SSH输入llhh，选择查看入口重新获取');
         const raw=token(),csrf=token();store.transaction(()=>{store.set('bootstrap-access',null);store.db.prepare('INSERT INTO sessions VALUES(?,?,?)').run(digest(raw),csrf,store.clock()+10*3600000);store.audit('使用首次设置链接');});
         return json(res,200,{csrf,...metadata()},{'Set-Cookie':`vps_session=${raw}; Path=${prefix}; HttpOnly; SameSite=Strict; Max-Age=36000${tls?'; Secure':''}`});
       }

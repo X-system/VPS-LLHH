@@ -184,5 +184,25 @@ RemainAfterExit=yes
 [Install]
 WantedBy=multi-user.target
 `;
+ units['vps-panel-ip-certificate.service']=`[Unit]
+Description=LLHH trusted IP certificate renewal
+After=network-online.target
+Wants=network-online.target
+[Service]
+Type=oneshot
+UMask=0077
+ExecStart=${node} ${app}/src/ip-certificate-cli.mjs --renew
+TimeoutStartSec=300
+`;
+ units['vps-panel-ip-certificate.timer']=`[Unit]
+Description=LLHH trusted IP certificate renewal schedule
+[Timer]
+OnBootSec=15min
+OnCalendar=*-*-* 00,12:00:00
+RandomizedDelaySec=15min
+Persistent=true
+[Install]
+WantedBy=timers.target
+`;
  return units;
 }

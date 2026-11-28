@@ -1,15 +1,18 @@
 import { DatabaseSync } from 'node:sqlite';
-import { existsSync, unlinkSync } from 'node:fs';
+import { existsSync, unlinkSync,writeFileSync } from 'node:fs';
 import { resolve,join } from 'node:path';
 import { openStore } from './store.mjs';
-import { token,hashPassword } from './security.mjs';
+import { token,hashPassword,digest } from './security.mjs';
 import { agentRequest } from './agent-client.mjs';
 import { serviceAction } from './deployment.mjs';
 
 const directory=resolve(process.env.VPS_DATA_DIR||'data');
 if(!existsSync(join(directory,'panel.sqlite')))throw new Error('面板尚未初始化');
 const action=process.argv[2]||'status';
-if(action==='address'||action==='status'){
+if(action==='address'){
+ const s=await openStore({directory});try{const entrance=s.get('entrance').value,origin=process.env.VPS_ORIGIN||`http://127.0.0.1:${process.env.VPS_PORT||18443}`,onboarding=s.get('onboarding');if(['welcome','account'].includes(onboarding?.step)&&!onboarding.completed?.includes('account')){const setupToken=token();s.set('bootstrap-access',{hash:digest(setupToken),expires:s.clock()+24*3600000});writeFileSync(join(directory,'.bootstrap.json'),JSON.stringify({setupToken}),{mode:0o600});console.log(`首次激活链接（24小时内有效，请勿转发）：\n${origin}/${entrance}/#setup=${setupToken}`);}else console.log(`${origin}/${entrance}/`);}finally{s.close();}
+}else if(action==='status'){
+
   const db=new DatabaseSync(join(directory,'panel.sqlite'),{readOnly:true});
   const get=key=>JSON.parse(db.prepare('SELECT value FROM config WHERE key=?').get(key).value);
   if(action==='address')console.log(`${process.env.VPS_ORIGIN||`http://127.0.0.1:${process.env.VPS_PORT||18443}`}/${get('entrance').value}/`);

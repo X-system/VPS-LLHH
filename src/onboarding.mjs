@@ -15,7 +15,7 @@ export function createOnboarding({store,request,fetchImpl=fetch,allowLocalBark=f
  let running=null,advancing=false,syncing=null;
  const read=()=>store.get('onboarding');
  const initial=read();if(initial?.job?.state==='running'){store.set('onboarding',{...initial,job:{...initial.job,state:'failed',message:'上次配置被中断，请重新检查并继续'}});store.set('runtime',{...store.get('runtime'),maintenance:true});}
- const steps=()=>store.get('settings').role==='exit'?['account','name','bark','pairing','review']:['account','name','protocols',...(read()?.draft?.protocols?.includes('hy2')?['certificate']:[]),'bark','pairing','review'];
+ const steps=()=>[...(read()?.welcome?['welcome']:[]),...(store.get('settings').role==='exit'?['account','name','bark','pairing','review']:['account','name','protocols',...(read()?.draft?.protocols?.includes('hy2')?['certificate']:[]),'bark','pairing','review'])];
  function view(){const state=read();if(!state)return{active:false};return{active:state.step!=='done',step:state.step,steps:steps(),completed:state.completed,draft:state.draft,hasCertificateSettings:!!store.get('certificate-settings'),job:state.job||null,role:store.get('settings').role};}
  function move(state){const order=steps(),index=order.indexOf(state.step);store.set('onboarding',{...state,completed:[...new Set([...state.completed,state.step])],step:order[index+1]||'review',job:null});return view();}
  async function zone(domain,secret){
@@ -31,6 +31,7 @@ export function createOnboarding({store,request,fetchImpl=fetch,allowLocalBark=f
   if(running)throw new HttpError(409,'正在自动配置，请等待检查结果');
   if(!input||typeof input!=='object'||Array.isArray(input)||input.step!==state.step)throw new HttpError(409,'引导进度已更新，请重新获取当前步骤');
   if(input.back===true){const order=steps(),index=order.indexOf(state.step);if(index<=1)throw new HttpError(409,'账户已设置，请在完成引导后到面板设置修改');const target=order[index-1];store.set('onboarding',{...state,step:target,completed:state.completed.filter(id=>order.indexOf(id)<index-1),job:null});return view();}
+  if(state.step==='welcome'){move(state);return view();}
   if(state.step==='account'){
    const username=text(input.username,'管理员名称',{max:48});if(typeof input.password!=='string'||input.password.length===0)throw new HttpError(400,'密码不能为空');
    const password=await hashPassword(input.password),raw=token(),csrf=token();

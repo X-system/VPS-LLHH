@@ -67,6 +67,30 @@ def main():
                 policy=json.loads(policy_file.read_text(encoding='utf-8'))
                 if policy.get('required')is True and role in policy.get('roles',['relay','exit']):body['body']+='\n\n<!-- llhh:update-policy {"required":true} -->'
             _,release=request(api+'/releases','POST',json.dumps(body).encode())
+        # Explicitly authorized replacement of this test build only. Preserve old
+        # source refs and program assets rather than losing the previous build.
+        if root==ROOT and test and version=='v0.3.3-test2' and os.environ.get('LLHH_REPLACE_TEST_RELEASE')==version:
+            package_name='vps-panel-'+version+'.tar.gz'
+            package_digest='sha256:'+hashlib.sha256((root/'dist'/package_name).read_bytes()).hexdigest()
+            current=next((a for a in release.get('assets',[])if a['name']==package_name),None)
+            if not current or current.get('digest')!=package_digest:
+                ref_path='/git/ref/tags/'+urllib.parse.quote(tag,safe='')
+                ref_status,ref=request(api+ref_path)
+                if ref_status==200:
+                    if ref['object']['type']!='commit':raise RuntimeError('Expected a lightweight release tag')
+                    old=ref['object']['sha']
+                    if old!=commit:
+                        archive_tag='archive/'+tag+'-'+old[:12]
+                        archived,_=request(api+'/git/ref/tags/'+urllib.parse.quote(archive_tag,safe=''))
+                        if archived==404:request(api+'/git/refs','POST',json.dumps({'ref':'refs/tags/'+archive_tag,'sha':old}).encode())
+                request(api+'/releases/'+str(release['id']),'PATCH',json.dumps({'draft':True,'target_commitish':commit}).encode())
+                for asset in release.get('assets',[]):
+                    if asset['name']in(package_name,package_name+'.sha256'):
+                        suffix=asset.get('digest','').removeprefix('sha256:')[:12]
+                        if not re.fullmatch('[a-f0-9]{12}',suffix):raise RuntimeError('Cannot archive asset without digest')
+                        request(api+'/releases/assets/'+str(asset['id']),'PATCH',json.dumps({'name':'archive-'+suffix+'-'+asset['name']}).encode())
+                if ref_status==200:request(api+'/git/refs/tags/'+urllib.parse.quote(tag,safe=''),'PATCH',json.dumps({'sha':commit,'force':True}).encode())
+                _,release=request(api+'/releases/'+str(release['id']))
         if not release['draft']:
             if root==ROOT and os.environ.get('LLHH_REFRESH_BOOTSTRAP')=='1':
                 upload(release,installer_files,rolling=True)
@@ -78,8 +102,13 @@ def main():
             print(tag+' already published; immutable program release retained.');return
         if release.get('target_commitish')!=commit:raise RuntimeError('Draft belongs to another commit; inspect before resuming')
         files={name:(root/'dist'/name).read_bytes()for name in ['vps-panel-'+version+'.tar.gz','vps-panel-'+version+'.tar.gz.sha256']}
-        upload(release,{**files,**installer_files})
-        request(api+'/releases/'+str(release['id']),'PATCH',json.dumps({'draft':False,'prerelease':test,'make_latest':'false'if test else 'true'}).encode())
+        upload(release,{**files,**installer_files},rolling=root==ROOT and os.environ.get('LLHH_REPLACE_TEST_RELEASE')==version)
+        published={'draft':False,'prerelease':test,'make_latest':'false'if test else 'true'}
+        if root==ROOT:
+            published['body']=release_notes(root,version)
+            policy_path=root/'config/update-policy.json'
+            if policy_path.exists()and json.loads(policy_path.read_text()).get('required')is True:published['body']+='\n\n<!-- llhh:update-policy {"required":true} -->'
+        request(api+'/releases/'+str(release['id']),'PATCH',json.dumps(published).encode())
         print('Published '+tag)
     for role in ['relay','exit']:publish(ROOT,version,revision,role)
     historical=ROOT/'config/historical-releases.json'

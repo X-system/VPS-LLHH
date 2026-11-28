@@ -140,6 +140,12 @@ llhh_step '安装面板与后台服务'
 bash "$STAGE/source/install.sh" --source "$STAGE/source" "${INSTALL_ARGS[@]}"
 printf '%s\n' "$REPOSITORY" >/etc/vps-panel/repository
 chmod 600 /etc/vps-panel/repository
+# Track only this generated temporary download, with a content hash.
+/usr/local/lib/vps-panel/runtime/bin/node --input-type=module - "${BASH_SOURCE[0]}" <<'RECEIPT'
+import{registerInstallerArtifact}from'/usr/local/lib/vps-panel/app/src/owned-artifacts.mjs';
+await registerInstallerArtifact(process.argv[2]);
+RECEIPT
+
 
 llhh_step '最终验收：检查管理服务和HTTPS入口'
 for unit in agent web auth worker;do
@@ -152,5 +158,10 @@ CHECK
 heading 'LLHH 安装完成 · 管理服务验收通过'
 printf '  服务器角色：%s\n  安装版本：%s\n\n  [通过] 管理器、网页、认证与采集后台已运行\n  [通过] HTTPS、管理入口与访问响应检查\n\n' "$ROLE_LABEL" "${VERSION#v}"
 printf '面板地址：\n'
-vps-panel address
-printf '\n下一步：打开上面的地址，按网页引导设置账号、证书与配对。\n首次设置链接和备用临时凭证请查看上方输出，请勿转发。\n代理线路请在网页内完成配置后确认开启。\nSSH备用管理：vps-panel\n'
+if [[ -f /var/lib/vps-panel/.bootstrap.json ]];then
+ ORIGIN=$(sed -n 's/^VPS_ORIGIN=//p' /etc/vps-panel/web.env)
+ runuser -u vps-panel -- env VPS_DATA_DIR=/var/lib/vps-panel VPS_ORIGIN="$ORIGIN" /usr/local/lib/vps-panel/runtime/bin/node /usr/local/lib/vps-panel/app/src/first-login.mjs
+else
+ if command -v llhh >/dev/null;then llhh address;else vps-panel address;fi
+fi
+printf '\n下一步：打开上面的地址，按网页引导设置账号、证书与配对。\n首次激活链接请查看上方输出，请勿转发。\n代理线路请在网页内完成配置后确认开启。\nSSH备用管理：llhh\n'

@@ -17,9 +17,9 @@ if(restore){
  resumeSetup(store);
 }else{
  store.set('settings',{...store.get('settings'),role,uiVersion:2});
- store.set('onboarding',{version:2,step:'account',completed:[],draft:{}});
+ store.set('onboarding',{version:2,step:'welcome',welcome:true,completed:[],draft:{}});
  const setupToken=token();store.set('bootstrap-access',{hash:digest(setupToken),expires:store.clock()+24*3600000});
- writeFileSync(join(directory,'.bootstrap.json'),JSON.stringify({username:'admin',password:store.bootstrapPassword,setupToken}),{mode:0o600,flag:'wx'});
+ writeFileSync(join(directory,'.bootstrap.json'),JSON.stringify({setupToken}),{mode:0o600,flag:'wx'});
 }
 console.log(JSON.stringify({role:store.get('settings').role,restored:restore}));
 store.close();

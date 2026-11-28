@@ -50,7 +50,7 @@ JS
    chmod 600 /usr/local/lib/vps-panel/install-complete.json
    echo '安装自检已补全，原账户和配置保持不变。'
   else echo '面板已经安装，未更改现有账户和配置；更新请使用系统维护。';fi
-  vps-panel address
+  if command -v llhh >/dev/null;then llhh address;else vps-panel address;fi
   if [[ -f /var/lib/vps-panel/.bootstrap.json && -f /usr/local/lib/vps-panel/app/src/first-login.mjs ]];then
    CURRENT_ORIGIN=$(sed -n 's/^VPS_ORIGIN=//p' /etc/vps-panel/web.env)
    runuser -u vps-panel -- env VPS_DATA_DIR=/var/lib/vps-panel VPS_ORIGIN="$CURRENT_ORIGIN" /usr/local/lib/vps-panel/runtime/bin/node /usr/local/lib/vps-panel/app/src/first-login.mjs
@@ -210,6 +210,10 @@ VPS_AGENT_ENABLED=1
 VPS_TLS_CERT=/run/credentials/vps-panel-web.service/fullchain.pem
 VPS_TLS_KEY=/run/credentials/vps-panel-web.service/privkey.pem
 EOF
+if [[ $PRESERVE_CERT == 0 ]];then
+ llhh_step '申请受信任IP证书（需要服务商放行TCP 80）'
+ /usr/local/lib/vps-panel/runtime/bin/node /usr/local/lib/vps-panel/app/src/ip-certificate-cli.mjs --initial
+fi
 /usr/local/lib/vps-panel/runtime/bin/node --input-type=module - <<'JS'
 import{writeFileSync}from'node:fs';
 import{serviceUnits}from'/usr/local/lib/vps-panel/app/src/service-units.mjs';
@@ -229,11 +233,12 @@ if(result.restored&&process.argv[3]==='1'){
 }
 writeFileSync('/etc/vps-panel/system.json',JSON.stringify({...panel,role:result.role,emergencyStop:result.restored,desired:{},networkDesired:false,autoStart:false,autoRepair:false}),{mode:0o600});
 JS
+install -m 755 /usr/local/lib/vps-panel/app/config/vps-panel /usr/local/bin/llhh
 install -m 755 /usr/local/lib/vps-panel/app/config/vps-panel /usr/local/bin/vps-panel
 llhh_step '启动管理服务并验证配置'
 systemctl daemon-reload
 systemd-analyze verify /etc/systemd/system/vps-panel-{agent,web,auth,worker,network,guard}.service /etc/systemd/system/vps-panel-{vmess-att,vmess-direct,hy2-att,hy2-direct}.service
-systemctl enable --now vps-panel-agent.service vps-panel-web.service vps-panel-auth.service vps-panel-worker.service
+systemctl enable --now vps-panel-agent.service vps-panel-web.service vps-panel-auth.service vps-panel-worker.service vps-panel-ip-certificate.timer
 if [[ $PANEL_BIND != 127.0.0.1 ]]; then
  /usr/local/lib/vps-panel/runtime/bin/node --input-type=module - "$PANEL_PORT" <<'JS'
 import{createFirewall}from'/usr/local/lib/vps-panel/app/src/firewall.mjs';
@@ -248,9 +253,8 @@ JS
 printf '{"completed":true}\n' >/usr/local/lib/vps-panel/install-complete.json
 chmod 600 /usr/local/lib/vps-panel/install-complete.json
 echo '面板已安装；所有代理线路仍处于停止状态。'
-echo '首次HTTPS为本机自签证书，域名证书需在网页配置。仅管理本程序规则，不重置现有防火墙。'
-VPS_ORIGIN="https://$PANEL_IP:$PANEL_PORT" vps-panel address
-echo '初始登录凭证：'
+echo '面板使用受信任IP证书并自动续期，账号及后续配置均在网页完成。'
+echo '首次激活面板（账号密码在网页中创建）：'
 runuser -u vps-panel -- env VPS_DATA_DIR=/var/lib/vps-panel VPS_ORIGIN="https://$PANEL_IP:$PANEL_PORT" /usr/local/lib/vps-panel/runtime/bin/node /usr/local/lib/vps-panel/app/src/first-login.mjs
-echo '首次通过IP打开时，如果浏览器提示初始证书未受信任，请核对上面的服务器IP，再选择“高级”继续访问。'
-printf '\nSSH备用管理：vps-panel\n'
+echo '打开首次激活链接，点击“激活面板”，再设置你的用户名和密码。'
+printf '\nSSH备用管理：llhh\n'

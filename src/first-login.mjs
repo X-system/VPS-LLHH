@@ -15,7 +15,7 @@ if(process.argv[1]&&resolve(process.argv[1])===fileURLToPath(import.meta.url)){
   try{
    const entrance=JSON.parse(db.prepare("SELECT value FROM config WHERE key='entrance'").get().value).value;
    if(bootstrap.setupToken)console.log('\n复制下面的地址到浏览器，直接开始首次设置：\n'+firstLoginAddress(process.env.VPS_ORIGIN,entrance,bootstrap.setupToken)+'\n首次设置链接仅可使用一次，24小时内有效，请勿转发。');
-   console.log('\n备用临时用户名：'+bootstrap.username+'\n备用临时密码：'+bootstrap.password+'\n进入网页后，请按引导设置自己的账户。');
+
   }finally{db.close();}
  }
 }

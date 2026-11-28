@@ -9,3 +9,6 @@ test('公开发布先校验全部附件再转正式；上传失败保留草稿�
   assert.ok(JSON.parse(result.stdout.trim().split('\n').at(-1)).passed);
  }
 });
+test('授权替换test2时归档旧源码和附件，发布新包后再恢复可见，不删除旧程序包',async()=>{
+ const result=await run(process.platform==='win32'?'python':'python3',['test/replacement-publish-fixture.py'],{timeout:15000,windowsHide:true,env:{...process.env,PYTHONDONTWRITEBYTECODE:'1'}});assert.equal(JSON.parse(result.stdout.trim().split('\n').at(-1)).oldSourceAndProgramsPreserved,true);
+});

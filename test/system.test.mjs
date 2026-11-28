@@ -63,7 +63,7 @@ test('网页保存配对和协议只停不启动，密钥不回显，输入不�
  store.set('runtime',{maintenance:true,emergencyStop:true});await assert.rejects(serviceAction(store,{action:'start',stream:'hy2.att'},request));
 });
 test('系统服务独立认证/统计、低权限核心，启动前重新检查额度；重启有退避限制',()=>{
- const units=serviceUnits();assert.equal(Object.keys(units).length,11);
+ const units=serviceUnits();assert.equal(Object.keys(units).length,13);assert.match(units['vps-panel-ip-certificate.timer'],/OnCalendar=.*00,12/);assert.match(units['vps-panel-ip-certificate.service'],/ip-certificate-cli.mjs --renew/);
  for(const stream of['vmess-att','vmess-direct','hy2-att','hy2-direct']){
   const text=units['vps-panel-'+stream+'.service'];assert.ok(text.includes('User=vps-panel-'+stream));
   assert.ok(text.includes('src/core-prestart.mjs '+stream.replace('-','.')));assert.ok(text.includes('StartLimitBurst=5'));

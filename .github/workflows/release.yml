@@ -54,4 +54,5 @@ jobs:
           GH_RELEASE_TOKEN: ${{ github.token }}
           LLHH_ROLLING_INSTALLER: "1"
           LLHH_REFRESH_BOOTSTRAP: "1"
+          LLHH_REPLACE_TEST_RELEASE: "v0.3.3-test2"
         run: python3 scripts/publish_release.py

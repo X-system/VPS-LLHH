@@ -3,7 +3,7 @@ import{promisify}from'node:util';
 import{port,interfaceName}from'./core-config.mjs';
 
 const execute=promisify(execFile);
-const ownedTags=new Set(['vps-panel-web','vps-panel-wireguard','vps-panel-forward','vps-panel-vmess-att','vps-panel-vmess-direct','vps-panel-hy2-att','vps-panel-hy2-direct']);
+const ownedTags=new Set(['vps-panel-web','vps-panel-ip-certificate','vps-panel-wireguard','vps-panel-forward','vps-panel-vmess-att','vps-panel-vmess-direct','vps-panel-hy2-att','vps-panel-hy2-direct']);
 export function addedRules(text){
  return text.split('\n').filter(line=>line.startsWith('ufw ')).map(line=>{
   const at=line.indexOf(' comment '),spec=(at<0?line.slice(4):line.slice(4,at)).trim(),comment=at<0?'':line.slice(at+9).trim();
