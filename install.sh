@@ -10,18 +10,24 @@ source /etc/os-release
 if [[ $ID != debian || ( $VERSION_ID != 12 && ! ( $VERSION_ID == 13 && ${VPS_INSTALL_TEST_DEBIAN13:-0} == 1 ) ) ]]; then echo '当前仅开放Debian 12安装；其他系统验收后开放。' >&2; exit 1; fi
 SOURCE=''
 RESTORE=0
+REINSTALL=0
 INSTALL_ROLE=${VPS_INSTALL_ROLE:-}
 while [[ $# -gt 0 ]]; do
- case "$1" in --source) SOURCE=${2:?缺少源码目录}; shift 2;; --restore) RESTORE=1;shift;; --role) INSTALL_ROLE=${2:?缺少安装角色};shift 2;;*) echo '使用：bash install.sh --source /绝对源码目录 [--role relay|exit] [--restore]' >&2; exit 1;; esac
+ case "$1" in --source) SOURCE=${2:?缺少源码目录}; shift 2;; --restore) RESTORE=1;shift;; --reinstall) REINSTALL=1;RESTORE=1;shift;; --role) INSTALL_ROLE=${2:?缺少安装角色};shift 2;;*) echo '使用：bash install.sh --source /绝对源码目录 [--role relay|exit] [--restore] [--reinstall]' >&2; exit 1;; esac
 done
 [[ -n $SOURCE && $SOURCE = /* && -f $SOURCE/src/server.mjs && -f $SOURCE/config/releases.json ]] || { echo '请提供完整源码的绝对路径。' >&2; exit 1; }
 source "$SOURCE/config/install-environment.sh"
 llhh_environment ca-certificates curl python3 xz-utils unzip openssl nftables iproute2 wireguard-tools util-linux kmod
 llhh_step '检查已有面板与数据兼容性'
-python3 - "$SOURCE" "$INSTALL_ROLE" <<'VERSION_GUARD'
-import sys,json,pathlib,sqlite3
+python3 - "$SOURCE" "$INSTALL_ROLE" "$REINSTALL" <<'VERSION_GUARD'
+import sys,json,pathlib,sqlite3,re
 source=pathlib.Path(sys.argv[1]);installed=pathlib.Path('/usr/local/lib/vps-panel/app/package.json')
-if installed.exists():assert json.loads(installed.read_text())['version']==json.loads((source/'package.json').read_text())['version'],'已安装其他版本，请使用面板更新；安装器不会覆盖现有版本'
+if installed.exists():
+ old=json.loads(installed.read_text())['version'];new=json.loads((source/'package.json').read_text())['version']
+ def order(v):
+  m=re.fullmatch(r'(\d+)\.(\d+)\.(\d+)(?:-test(\d+))?',v);assert m,'版本格式无法识别'
+  return (*map(int,m.group(1,2,3)),m[4]is None,int(m[4]or 0))
+ assert old==new or sys.argv[3]=='1'and order(new)>=order(old),'不允许覆盖为旧版本；更新或重新安装请选择兼容版本'
 system=pathlib.Path('/etc/vps-panel/system.json')
 if sys.argv[2]and system.exists():assert json.loads(system.read_text())['role']==sys.argv[2],'已安装其他角色，请在面板内受控切换角色；安装器不会覆盖'
 database=pathlib.Path('/var/lib/vps-panel/panel.sqlite')
@@ -39,7 +45,7 @@ assert path.is_file()and not path.is_symlink()and json.loads(path.read_text()).g
 PY
  EXISTING_HEALTHY=1
  for service in agent web auth worker; do systemctl is-active --quiet "vps-panel-$service.service" || EXISTING_HEALTHY=0;done
- if [[ $EXISTING_HEALTHY == 1 ]] && /usr/local/lib/vps-panel/runtime/bin/node --input-type=module - "$SOURCE" <<'JS'
+ if [[ $REINSTALL == 0 && $EXISTING_HEALTHY == 1 ]] && /usr/local/lib/vps-panel/runtime/bin/node --input-type=module - "$SOURCE" <<'JS'
 import{pathToFileURL}from'node:url';
 const{managementHealth}=await import(pathToFileURL(process.argv[2]+'/src/management-health.mjs'));
 await managementHealth({attempts:60});
@@ -57,10 +63,10 @@ JS
   fi
   exit 0
  fi
- if [[ -e /usr/local/lib/vps-panel/install-complete.json ]]; then echo '已安装的服务当前异常，请先使用SSH应急菜单恢复；不会覆盖现有数据。' >&2;exit 1;fi
+ if [[ $REINSTALL == 0 && -e /usr/local/lib/vps-panel/install-complete.json ]]; then echo '已安装的服务当前异常，请先使用SSH应急菜单恢复；不会覆盖现有数据。' >&2;exit 1;fi
  SOURCE=$(realpath -e -- "$SOURCE")
  [[ $SOURCE != /usr/local/lib/vps-panel && $SOURCE != /usr/local/lib/vps-panel/* ]] || { echo '修复未完成安装时，请从独立下载目录运行安装器。';exit 1; }
- echo '发现未完成安装，保留原数据并重新部署程序；所有代理保持停止。'
+ echo '保留原数据并重新部署程序；所有代理保持停止。'
  if [[ -f /var/lib/vps-panel/panel.sqlite && -x /usr/local/lib/vps-panel/runtime/bin/node && -f /usr/local/lib/vps-panel/app/src/emergency-cli.mjs ]]; then
   /usr/local/lib/vps-panel/runtime/bin/node /usr/local/lib/vps-panel/app/src/emergency-cli.mjs emergency-stop
  fi
@@ -221,9 +227,10 @@ for(const[name,contents]of Object.entries(serviceUnits()))writeFileSync('/etc/sy
 JS
 INIT_ARGS=()
 [[ $RESTORE == 0 ]] || INIT_ARGS+=(--restore)
+[[ $REINSTALL == 0 ]] || INIT_ARGS+=(--preserve-config)
 [[ $RESTORE == 1 ]] || INIT_ARGS+=(--role "$INSTALL_ROLE")
 INIT_RESULT=$(runuser -u vps-panel -- env VPS_DATA_DIR=/var/lib/vps-panel /usr/local/lib/vps-panel/runtime/bin/node /usr/local/lib/vps-panel/app/src/install-init.mjs "${INIT_ARGS[@]}")
-/usr/local/lib/vps-panel/runtime/bin/node --input-type=module - "$INIT_RESULT" "$PRESERVE_CERT" <<'JS'
+/usr/local/lib/vps-panel/runtime/bin/node --input-type=module - "$INIT_RESULT" "$PRESERVE_CERT" "$REINSTALL" <<'JS'
 import{writeFileSync,readFileSync}from'node:fs';
 const result=JSON.parse(process.argv[2]);
 if(!['relay','exit'].includes(result.role))throw new Error('恢复角色错误');
@@ -231,7 +238,8 @@ let panel={};
 if(result.restored&&process.argv[3]==='1'){
  try{const previous=JSON.parse(readFileSync('/etc/vps-panel/system.json','utf8'));panel={panelUseAcme:!!previous.panelUseAcme,initialOrigin:previous.initialOrigin||null,panelCertificateFingerprint:previous.panelCertificateFingerprint||null};}catch(error){if(error.code!=='ENOENT')throw error;}
 }
-writeFileSync('/etc/vps-panel/system.json',JSON.stringify({...panel,role:result.role,emergencyStop:result.restored,desired:{},networkDesired:false,autoStart:false,autoRepair:false}),{mode:0o600});
+const previous=process.argv[4]==='1'?JSON.parse(readFileSync('/etc/vps-panel/system.json','utf8')):{};
+writeFileSync('/etc/vps-panel/system.json',JSON.stringify({...previous,...panel,role:result.role,emergencyStop:result.restored,desired:{},networkDesired:false,...(process.argv[4]==='1'?{}:{autoStart:false,autoRepair:false})}),{mode:0o600});
 JS
 install -m 755 /usr/local/lib/vps-panel/app/config/vps-panel /usr/local/bin/llhh
 install -m 755 /usr/local/lib/vps-panel/app/config/vps-panel /usr/local/bin/vps-panel
@@ -252,9 +260,15 @@ await managementHealth({attempts:60});
 JS
 printf '{"completed":true}\n' >/usr/local/lib/vps-panel/install-complete.json
 chmod 600 /usr/local/lib/vps-panel/install-complete.json
+if [[ -n ${INCOMPLETE:-} ]];then
+ [[ $INCOMPLETE =~ ^/usr/local/lib/vps-panel\.incomplete\.[0-9]+\.[0-9]+$ && ! -L $INCOMPLETE && $(realpath -e -- "$INCOMPLETE") == "$INCOMPLETE" ]] || { echo '旧程序目录身份异常，未清理。';exit 1; }
+ rm -rf -- "$INCOMPLETE"
+fi
 echo '面板已安装；所有代理线路仍处于停止状态。'
 echo '面板使用受信任IP证书并自动续期，账号及后续配置均在网页完成。'
-echo '首次激活面板（账号密码在网页中创建）：'
-runuser -u vps-panel -- env VPS_DATA_DIR=/var/lib/vps-panel VPS_ORIGIN="https://$PANEL_IP:$PANEL_PORT" /usr/local/lib/vps-panel/runtime/bin/node /usr/local/lib/vps-panel/app/src/first-login.mjs
+if [[ -f /var/lib/vps-panel/.bootstrap.json ]];then
+ echo '首次激活面板（账号密码在网页中创建）：'
+ runuser -u vps-panel -- env VPS_DATA_DIR=/var/lib/vps-panel VPS_ORIGIN="https://$PANEL_IP:$PANEL_PORT" /usr/local/lib/vps-panel/runtime/bin/node /usr/local/lib/vps-panel/app/src/first-login.mjs
+else llhh address;fi
 echo '打开首次激活链接，点击“激活面板”，再设置你的用户名和密码。'
 printf '\nSSH备用管理：llhh\n'

@@ -46,4 +46,3 @@ for r in releases.values():
     assert refs['archive/'+r['tag_name']+'-'+old[:12]]==old
     assert len([a for a in r['assets']if a['name'].startswith('archive-')])==2
 print(json.dumps({'oldSourceAndProgramsPreserved':True,'newPackageAndTagConsistent':True}))
-

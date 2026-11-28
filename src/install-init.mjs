@@ -11,10 +11,15 @@ if(existsSync(join(directory,'panel.sqlite'))&&!restore)throw new Error('禁止�
 const store=await openStore({directory});
 if(restore){
  store.set('runtime',{maintenance:true,emergencyStop:true});
+ if(process.argv.includes('--preserve-config')){
+  for(const key of['access-applied','service-status','live-traffic'])store.set(key,null);
+  store.audit('覆盖安装完成，保留账户、配置、配对和统计；线路保持停止');
+ }else{
  for(const key of['relay-config','relay-pending','network-config','auth-services','access-applied','service-status','live-traffic'])store.set(key,null);
  const encoded=store.get('role-archives');if(encoded){const archives=JSON.parse(store.unseal(encoded));for(const snapshot of Object.values(archives))snapshot.config={};store.set('role-archives',store.seal(JSON.stringify(archives)));}
  store.audit('恢复安装，保留账户及统计并要求重新确认配对');
  resumeSetup(store);
+ }
 }else{
  store.set('settings',{...store.get('settings'),role,uiVersion:2});
  store.set('onboarding',{version:2,step:'welcome',welcome:true,completed:[],draft:{}});

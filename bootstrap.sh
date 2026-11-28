@@ -6,6 +6,7 @@ VERSION=''
 INSTALLABLE_VERSIONS='["v0.3.3-test2"]'
 RESTORE=0
 INSTALL_ROLE=''
+EXISTING_ACTION=''
 while [[ $# -gt 0 ]]; do
  case "$1" in --repository) REPOSITORY=${2:?缺少仓库};shift 2;;--version) VERSION=${2:?缺少版本};shift 2;;--role)INSTALL_ROLE=${2:?缺少安装角色};shift 2;;--restore)RESTORE=1;shift;;*) echo '参数错误。';exit 1;;esac
 done
@@ -27,6 +28,20 @@ ask(){
 }
 heading 'LLHH 安装向导'
 printf '  环境检查已通过，接下来选择角色和版本。\n'
+if [[ -e /usr/local/lib/vps-panel/app ]];then
+ heading '检测到已安装的 LLHH 面板'
+ printf '  1) 跳过：保留当前面板，不做修改\n  2) 覆盖安装（保留数据）：替换程序，保留账户、配置和统计\n  3) 全新安装：清除面板数据，重新开始网页激活\n\n'
+ while true;do
+  ask EXISTING_CHOICE '请输入 [1-3]：'
+  case "$EXISTING_CHOICE" in
+   1) printf '\n已跳过安装，现有面板未更改。\n';if command -v llhh >/dev/null;then llhh address;else vps-panel address;fi;exit 0;;
+   2) EXISTING_ACTION=overwrite;RESTORE=1;INSTALL_ROLE=$(python3 -c 'import json; r=json.load(open("/etc/vps-panel/system.json"))["role"];assert r in ("relay","exit");print(r)');break;;
+   3) EXISTING_ACTION=fresh;RESTORE=0;break;;
+   *) printf '输入无效，请输入数字1、2或3。\n';;
+  esac
+ done
+ INTERACTIVE=1
+fi
 if [[ -z $INSTALL_ROLE ]];then
  INTERACTIVE=1
  heading '第1步 / 3  选择服务器角色'
@@ -39,8 +54,8 @@ fi
 ROLE_LABEL='中转端';[[ $INSTALL_ROLE != exit ]] || ROLE_LABEL='出口端'
 printf '\n已选择：%s\n' "$ROLE_LABEL"
 heading '第2步 / 3  选择安装版本'
-STAGE=$(mktemp -d /var/tmp/vps-panel-bootstrap.XXXXXXXX)
-cleanup(){ if [[ $STAGE == /var/tmp/vps-panel-bootstrap.* && -d $STAGE && ! -L $STAGE ]];then rm -rf -- "$STAGE";fi; }
+STAGE=$(mktemp -d /var/tmp/llhh-bootstrap.XXXXXXXX)
+cleanup(){ if [[ $STAGE == /var/tmp/llhh-bootstrap.* && -d $STAGE && ! -L $STAGE ]];then rm -rf -- "$STAGE";fi; }
 trap cleanup EXIT
 llhh_step '获取可安装版本列表'
 python3 - "$REPOSITORY" "$STAGE/versions.json" "$INSTALL_ROLE" "$INSTALLABLE_VERSIONS" <<'CATALOG'
@@ -84,14 +99,20 @@ fi
 llhh_step '验证所选安装版本'
 EXPECTED=$(python3 -c 'import json,sys;items=json.load(open(sys.argv[1]));item=next((a for a in items if a["tag"]==sys.argv[2]),None);print(item["sha256"]if item else "")' "$STAGE/versions.json" "$VERSION")
 [[ $EXPECTED =~ ^[a-f0-9]{64}$ ]] || llhh_stop '所选版本当前不提供安装，或发布校验信息不完整，请重新运行选择可安装版本。'
-python3 - "$VERSION" <<'EXISTING'
+python3 - "$VERSION" "$EXISTING_ACTION" <<'EXISTING'
 import sys,json,pathlib
 path=pathlib.Path('/usr/local/lib/vps-panel/app/package.json')
-if path.exists():
+if path.exists()and sys.argv[2]not in('overwrite','fresh'):
  assert not path.is_symlink(),'安装目录不安全'
  assert json.loads(path.read_text())['version']==sys.argv[1][1:],'已安装其他版本。安装器不会覆盖或降级现有面板，请使用面板更新；需要切换到旧版时先卸载并使用空白数据目录。'
 EXISTING
 heading '第3步 / 3  确认安装'
+if [[ $EXISTING_ACTION == overwrite ]];then printf '  覆盖安装：账户、配对、配置和统计保留；线路停止，完成后在网页确认启动。\n';fi
+if [[ $EXISTING_ACTION == fresh ]];then
+ printf '  警告：全新安装将永久删除本机面板账户、用户、配置、证书和统计。其他软件不删除。\n'
+ ask PURGE_CONFIRM '确认清空面板数据，请输入 DELETE：'
+ [[ $PURGE_CONFIRM == DELETE ]] || { echo '已取消，原面板未更改。';exit 0; }
+fi
 printf '  服务器角色：%s\n  安装版本：%s\n  安装方式：自动检查环境、安装依赖并验证管理服务\n' "$ROLE_LABEL" "${VERSION#v}"
 if [[ $INTERACTIVE == 1 ]];then
  printf '\n  1) 确认并开始安装\n  0) 取消，不继续安装\n\n'
@@ -131,6 +152,12 @@ with tarfile.open(archive,'r:gz')as tar:
 PACKAGE
 INSTALL_ARGS=()
 [[ $RESTORE == 0 ]] || INSTALL_ARGS+=(--restore)
+[[ $EXISTING_ACTION != overwrite ]] || INSTALL_ARGS+=(--reinstall)
+if [[ $EXISTING_ACTION == fresh ]];then
+ llhh_step '清除旧面板及其数据'
+ /usr/local/lib/vps-panel/runtime/bin/node /usr/local/lib/vps-panel/app/src/uninstall.mjs --purge-data
+ for path in /usr/local/lib/vps-panel /etc/vps-panel /var/lib/vps-panel;do [[ ! -e $path ]] || llhh_stop '旧面板未完整卸载，已停止全新安装。';done
+fi
 if [[ -n $INSTALL_ROLE ]];then
  python3 -c 'import json,sys;assert json.load(open(sys.argv[1])).get("installRoleArgument"),"这个历史版本在网页中选择角色，不支持 --role 参数"' "$STAGE/source/release-manifest.json"
  INSTALL_ARGS+=(--role "$INSTALL_ROLE")
@@ -141,8 +168,9 @@ bash "$STAGE/source/install.sh" --source "$STAGE/source" "${INSTALL_ARGS[@]}"
 printf '%s\n' "$REPOSITORY" >/etc/vps-panel/repository
 chmod 600 /etc/vps-panel/repository
 # Track only this generated temporary download, with a content hash.
-/usr/local/lib/vps-panel/runtime/bin/node --input-type=module - "${BASH_SOURCE[0]}" <<'RECEIPT'
-import{registerInstallerArtifact}from'/usr/local/lib/vps-panel/app/src/owned-artifacts.mjs';
+/usr/local/lib/vps-panel/runtime/bin/node --input-type=module - "${BASH_SOURCE[0]}" "$STAGE/source" <<'RECEIPT'
+import{pathToFileURL}from'node:url';
+const{registerInstallerArtifact}=await import(pathToFileURL(process.argv[3]+'/src/owned-artifacts.mjs'));
 await registerInstallerArtifact(process.argv[2]);
 RECEIPT
 
