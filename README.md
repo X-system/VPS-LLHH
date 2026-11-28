@@ -38,7 +38,7 @@ node src/cli.mjs address
 以root登录Debian12 amd64，执行这一条命令：
 
 ```sh
-apt-get update && apt-get install -y curl ca-certificates && f=$(mktemp) && curl -fsSL --retry 3 https://github.com/X-system/VPS-LLHH/releases/download/v0.2.0/bootstrap.sh -o "$f" && bash "$f"
+apt-get update && apt-get -o DPkg::Lock::Timeout=600 install -y curl ca-certificates && f=$(mktemp) && curl -fsSL --retry 3 https://github.com/X-system/VPS-LLHH/releases/download/v0.2.0/bootstrap.sh -o "$f" && bash "$f"
 ```
 
 安装时选择：`1` 中转端，或 `2` 出口端。安装完成后打开终端显示的一次性设置链接，继续网页引导。首次IP访问使用自动申请的受信任证书，证书申请失败会明确停止。

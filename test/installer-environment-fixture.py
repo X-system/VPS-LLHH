@@ -31,6 +31,7 @@ printf '#!/bin/bash\necho child-ran >>"$FIXTURE/calls"\n' >"$target"
             env={**os.environ,'FIXTURE':str(path),'CASE':case,'PATH':str(binary)+':'+os.environ['PATH'],'SPACE':'100'if case=='space'else'9999999'}
             result=subprocess.run(['bash',str(script)],text=True,capture_output=True,env=env,timeout=15)
             calls=(path/'calls').read_text()if(path/'calls').exists()else''
+            if 'apt 'in calls:assert all('DPkg::Lock::Timeout=600'in line for line in calls.splitlines()if line.startswith('apt ')),calls
             if case in ['ready','missing']:
                 assert result.returncode==0,(source,case,result.stderr,result.stdout)
                 assert ('apt 'in calls)==(case=='missing')

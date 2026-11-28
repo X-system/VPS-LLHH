@@ -9,10 +9,10 @@ source /etc/os-release
 [[ $ID == debian && $VERSION_ID == 12 && $(uname -m) == x86_64 ]] || { echo "[LLHH] 当前只支持Debian 12 amd64，已停止，未修改软件源。"; exit 1; }
 step="准备下载组件：检查软件源、服务器联网及可用空间"
 if ! command -v curl >/dev/null || ! command -v python3 >/dev/null || [[ ! -s /etc/ssl/certs/ca-certificates.crt ]];then
- echo "[LLHH] 正在自动安装下载组件和CA证书，请等待；软件包锁最多等待120秒。"
+ echo "[LLHH] 正在自动安装下载组件和CA证书，请等待；软件包锁最多等待10分钟。"
  export DEBIAN_FRONTEND=noninteractive
- apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=20 -o Acquire::https::Timeout=20 -o DPkg::Lock::Timeout=120 update --error-on=any
- apt-get -o DPkg::Lock::Timeout=120 -o Acquire::Retries=3 --no-remove install -y --no-install-recommends ca-certificates curl python3
+ apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=20 -o Acquire::https::Timeout=20 -o DPkg::Lock::Timeout=600 update --error-on=any
+ apt-get -o DPkg::Lock::Timeout=600 -o Acquire::Retries=3 --no-remove install -y --no-install-recommends ca-certificates curl python3
 fi
 command -v curl >/dev/null && command -v python3 >/dev/null && [[ -s /etc/ssl/certs/ca-certificates.crt ]] || { echo "[LLHH] 下载组件安装后检查失败，请保留上方软件包错误信息。"; exit 1; }
 step="下载LLHH引导：请检查DNS、时间和到GitHub的HTTPS连接"
