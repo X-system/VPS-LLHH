@@ -34,7 +34,7 @@ if [[ -e /usr/local/lib/vps-panel/app ]];then
  while true;do
   ask EXISTING_CHOICE '请输入 [1-3]：'
   case "$EXISTING_CHOICE" in
-   1) printf '\n已跳过安装，现有面板未更改。\n';if command -v llhh >/dev/null;then llhh address;else vps-panel address;fi;exit 0;;
+   1) printf '\n已跳过安装，现有面板未更改。\n如需查看入口，请输入 llhh。\n';exit 0;;
    2) EXISTING_ACTION=overwrite;RESTORE=1;INSTALL_ROLE=$(python3 -c 'import json; r=json.load(open("/etc/vps-panel/system.json"))["role"];assert r in ("relay","exit");print(r)');break;;
    3) EXISTING_ACTION=fresh;RESTORE=0;break;;
    *) printf '输入无效，请输入数字1、2或3。\n';;

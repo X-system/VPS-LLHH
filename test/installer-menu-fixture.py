@@ -36,7 +36,7 @@ with tempfile.TemporaryDirectory(prefix='llhh-menu-')as temporary:
     existing=code.replace(str(path/'absent-app'),str(app)).replace('/etc/vps-panel/system.json',str(state))
     existing=existing.replace('set -Eeuo pipefail','set -Eeuo pipefail\nllhh(){ echo FIXTURE_ADDRESS; }')
     script.write_text(existing)
-    for payload,expected in [(b'1\n','FIXTURE_ADDRESS'),(b'2\n1\n1\n','FIXTURE_CONFIRMED'),(b'3\n1\n1\nDELETE\n1\n','FIXTURE_CONFIRMED'),(b'3\n1\n1\nNO\n','已取消')]:
+    for payload,expected in [(b'1\n','已跳过安装'),(b'2\n1\n1\n','FIXTURE_CONFIRMED'),(b'3\n1\n1\nDELETE\n1\n','FIXTURE_CONFIRMED'),(b'3\n1\n1\nNO\n','已取消')]:
         pid,fd=pty.fork()
         if pid==0:os.execv('/bin/bash',['bash',str(script)])
         os.write(fd,payload);chunks=[];deadline=time.monotonic()+10
